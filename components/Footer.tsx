@@ -3,13 +3,13 @@
 import Link from 'next/link';
 import { useCMS } from '@/context/CMSContext';
 import { motion } from 'framer-motion';
+import BrandLogo from './BrandLogo';
 
 export default function Footer() {
   const { getSetting } = useCMS();
 
   const siteName = getSetting('site_name') || 'MultiMey Supplies';
   const footerLogo = getSetting('footer_logo') || getSetting('site_logo') || '';
-  const footerLogoHeight = getSetting('footer_logo_height') || '40';
   const contactEmail = getSetting('contact_email') || '';
   const contactPhone = getSetting('contact_phone') || '';
   const socialInstagram = getSetting('social_instagram') || '';
@@ -49,11 +49,10 @@ export default function Footer() {
           <div className="col-span-1 lg:col-span-1">
             {footerLogo && (
               <Link href="/" className="inline-block mb-6">
-                <img
+                <BrandLogo
                   src={footerLogo}
                   alt={siteName}
-                  className="w-auto object-contain"
-                  style={{ maxHeight: `${footerLogoHeight}px`, height: '48px' }}
+                  className="h-12 w-auto object-contain"
                 />
               </Link>
             )}

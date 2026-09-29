@@ -7,6 +7,7 @@ import { useCart } from '@/context/CartContext';
 import { supabase } from '@/lib/supabase';
 import { useCMS } from '@/context/CMSContext';
 import AnnouncementBar from './AnnouncementBar';
+import BrandLogo from './BrandLogo';
 
 /** Mobile menu: link or expandable parent with sub-items (2 levels under Shop) */
 type MobileNavLink = { label: string; href: string };
@@ -208,10 +209,11 @@ export default function Header() {
                 <i className="ri-menu-line text-2xl" aria-hidden />
               </button>
               <Link href="/" className="flex items-center shrink-0 group" aria-label={`${siteName} home`}>
-                <img
+                <BrandLogo
                   src={siteLogo}
                   alt={siteName}
-                  className="h-10 sm:h-12 md:h-16 w-auto object-contain transition-transform duration-500 group-hover:opacity-80"
+                  priority
+                  className="h-10 w-auto object-contain transition-opacity duration-500 group-hover:opacity-80 sm:h-12 md:h-16"
                 />
               </Link>
             </div>

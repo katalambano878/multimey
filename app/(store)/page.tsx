@@ -173,7 +173,7 @@ export default function Home() {
                 alt={index === 0 ? 'Curated Personal Essentials' : 'Electronics & Gadgets'}
                 priority={index === 0}
                 sizes="100vw"
-                quality={85}
+                quality={70}
               />
             </motion.div>
           ))}

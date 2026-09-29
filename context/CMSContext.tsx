@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
+import { BRAND_LOGO } from '@/components/BrandLogo';
 
 // ── Types ──────────────────────────────────────────────────────────
 export interface SiteSettings {
@@ -191,7 +192,7 @@ export const defaultSettings: SiteSettings = {
     // General
     site_name: 'MultiMey Supplies',
     site_tagline: 'Your tagline here.',
-    site_logo: '',
+    site_logo: BRAND_LOGO,
     site_favicon: '/favicon.ico',
     contact_email: 'contact@example.com',
     contact_phone: '+233209597443',
@@ -291,7 +292,7 @@ export const defaultSettings: SiteSettings = {
     header_show_account: 'true',
 
     // Footer
-    footer_logo: '',
+    footer_logo: BRAND_LOGO,
     footer_logo_height: '56',
     footer_newsletter_title: 'Join Our Community',
     footer_newsletter_subtitle: 'Get exclusive access to new arrivals, secret sales, and more.',

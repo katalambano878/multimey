@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   images: {
+    formats: ['image/webp'],
     minimumCacheTTL: 2592000, // Cache optimized images for 30 days
     remotePatterns: [
       {
