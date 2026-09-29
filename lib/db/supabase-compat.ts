@@ -64,6 +64,23 @@ const PG_IDENT = /^[a-z_][a-z0-9_]*$/i;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+const columnExistsCache = new Map<string, boolean>();
+
+async function tableHasColumn(table: string, column: string): Promise<boolean> {
+  const key = `${table}.${column}`;
+  const cached = columnExistsCache.get(key);
+  if (cached !== undefined) return cached;
+  const res = await getPool().query(
+    `SELECT 1 FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2
+     LIMIT 1`,
+    [table, column]
+  );
+  const ok = (res.rowCount ?? 0) > 0;
+  columnExistsCache.set(key, ok);
+  return ok;
+}
+
 function ident(name: string): string {
   if (!PG_IDENT.test(name)) {
     throw new Error(`Unsafe SQL identifier: ${name}`);
@@ -670,9 +687,12 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any; count: number
         let related: Row[] = [];
         if (parentIds.length) {
           const ph = parentIds.map((_, i) => `$${i + 1}`).join(",");
-          // Prefer stable gallery order when embed selects a position column
+          // Gallery tables (product_images) have position. Variant tables do not.
+          // Ordering every star-embed by position makes the whole product query fail.
+          const wantsPosition =
+            embed.select.star || embed.select.columns.includes("position");
           const orderBy =
-            embed.select.star || embed.select.columns.includes("position")
+            wantsPosition && (await tableHasColumn(embedTable, "position"))
               ? ` ORDER BY ${ident("position")} ASC NULLS LAST`
               : "";
           const res = await pool.query(
