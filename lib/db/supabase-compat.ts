@@ -88,6 +88,16 @@ function ident(name: string): string {
   return `"${name}"`;
 }
 
+const JSON_PATH_RE = /^([a-z_][a-z0-9_]*)((?:->>?[a-z0-9_]+)+)$/i;
+
+/** Column reference that also accepts PostgREST JSON paths (metadata->>classification). */
+function columnRef(col: string): string {
+  const m = JSON_PATH_RE.exec(col);
+  if (!m) return ident(col);
+  const path = m[2].replace(/(->>?)([a-z0-9_]+)/gi, (_, arrow, key) => `${arrow}'${key}'`);
+  return `${ident(m[1])}${path}`;
+}
+
 /** Cast uuid-like columns to text when the filter value is not a UUID. */
 function uuidSafeLeft(col: string, value: any): string {
   const looksUuidCol = col === "id" || col.endsWith("_id");
@@ -99,7 +109,7 @@ function uuidSafeLeft(col: string, value: any): string {
   ) {
     return `${ident(col)}::text`;
   }
-  return ident(col);
+  return columnRef(col);
 }
 
 // ---- select-string parser (handles nested embeds with parentheses) ---------
@@ -398,44 +408,65 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any; count: number
   private buildWhere(params: any[]): string {
     const clauses: string[] = [];
     for (const f of this.filters) {
-      if (f.kind === "cmp") {
-        clauses.push(this.cmpClause(f.col!, f.op!, f.value, params));
-      } else if (f.kind === "in") {
-        if (!f.values || f.values.length === 0) {
-          clauses.push("false");
-        } else {
-          const ph = f.values.map((v) => {
-            params.push(v);
-            return `$${params.length}`;
-          });
-          clauses.push(`${ident(f.col!)} IN (${ph.join(",")})`);
-        }
-      } else if (f.kind === "notIn") {
-        const raw = String(f.value).replace(/^\(|\)$/g, "").trim();
-        if (!raw) { clauses.push("true"); continue; }
-        const vals = raw.split(",").map((s) => s.trim());
-        const ph = vals.map((v) => {
-          params.push(v);
-          return `$${params.length}`;
-        });
-        clauses.push(`(${ident(f.col!)} IS NULL OR ${ident(f.col!)} NOT IN (${ph.join(",")}))`);
-      } else if (f.kind === "is") {
-        clauses.push(this.isClause(f.col!, f.value));
-      } else if (f.kind === "notIs") {
-        const inner = this.isClause(f.col!, f.value);
-        clauses.push(`NOT (${inner})`);
-      } else if (f.kind === "or") {
-        clauses.push(this.orClause(f.orParts!, params));
+      const dot = f.col ? f.col.indexOf(".") : -1;
+      if (dot === -1) {
+        clauses.push(this.filterClause(f, params));
+      } else {
+        const inner = this.filterClause({ ...f, col: f.col!.slice(dot + 1) }, params);
+        clauses.push(this.embeddedFilter(f.col!.slice(0, dot), inner));
       }
     }
     return clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   }
 
+  private filterClause(f: Filter, params: any[]): string {
+    if (f.kind === "cmp") return this.cmpClause(f.col!, f.op!, f.value, params);
+    if (f.kind === "in") {
+      if (!f.values || f.values.length === 0) return "false";
+      const ph = f.values.map((v) => {
+        params.push(v);
+        return `$${params.length}`;
+      });
+      return `${columnRef(f.col!)} IN (${ph.join(",")})`;
+    }
+    if (f.kind === "notIn") {
+      const raw = String(f.value).replace(/^\(|\)$/g, "").trim();
+      if (!raw) return "true";
+      const vals = raw.split(",").map((s) => s.trim());
+      const ph = vals.map((v) => {
+        params.push(v);
+        return `$${params.length}`;
+      });
+      const left = columnRef(f.col!);
+      return `(${left} IS NULL OR ${left} NOT IN (${ph.join(",")}))`;
+    }
+    if (f.kind === "is") return this.isClause(f.col!, f.value);
+    if (f.kind === "notIs") return `NOT (${this.isClause(f.col!, f.value)})`;
+    if (f.kind === "or") return this.orClause(f.orParts!, params);
+    throw new Error(`Unsupported filter kind: ${f.kind}`);
+  }
+
+  /** Filter on an embedded resource column (PostgREST `categories.slug=in.(...)`). */
+  private embeddedFilter(alias: string, innerClause: string): string {
+    const embed = parseSelect(this.selectStr).embeds.find((e) => e.alias === alias);
+    const embedTable = embed?.table ?? alias;
+    const forward =
+      (FK_MAP[this.table] || []).find((e) => e.column === embed?.fkColumn) ??
+      (FK_MAP[this.table] || []).find((e) => e.foreignTable === embedTable);
+    if (forward) {
+      return `${ident(forward.column)} IN (SELECT ${ident(forward.foreignColumn)} FROM ${ident(forward.foreignTable)} WHERE ${innerClause})`;
+    }
+    const reverse = this.findReverseEdge(embedTable);
+    if (!reverse) throw new Error(`Cannot filter on unknown embed: ${alias}`);
+    return `${ident("id")} IN (SELECT ${ident(reverse.column)} FROM ${ident(embedTable)} WHERE ${innerClause})`;
+  }
+
   private isClause(col: string, value: any): string {
-    if (value === null || value === "null") return `${ident(col)} IS NULL`;
-    if (value === true || value === "true") return `${ident(col)} IS TRUE`;
-    if (value === false || value === "false") return `${ident(col)} IS FALSE`;
-    return `${ident(col)} IS NOT DISTINCT FROM ${value}`;
+    const left = columnRef(col);
+    if (value === null || value === "null") return `${left} IS NULL`;
+    if (value === true || value === "true") return `${left} IS TRUE`;
+    if (value === false || value === "false") return `${left} IS FALSE`;
+    return `${left} IS NOT DISTINCT FROM ${value}`;
   }
 
   private cmpClause(col: string, op: string, value: any, params: any[]): string {
@@ -496,7 +527,7 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any; count: number
         params.push(v);
         return `$${params.length}`;
       });
-      return `${ident(col)} IN (${placeholders.join(", ")})`;
+      return `${columnRef(col)} IN (${placeholders.join(", ")})`;
     }
 
     const second = rest.indexOf(".");
