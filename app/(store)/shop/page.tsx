@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { usePageTitle } from '@/hooks/usePageTitle';
 import ProductCard, { type ColorVariant } from '@/components/ProductCard';
@@ -20,27 +20,25 @@ function ShopContent() {
   const [products, setProducts] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([{ id: 'all', name: 'All Products', count: 0 }]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [totalProducts, setTotalProducts] = useState(0);
 
   // Filters
-  const parsePage = (value: string | null) => {
-    const p = value ? parseInt(value, 10) : 1;
-    return !isNaN(p) && p >= 1 ? p : 1;
-  };
   const [selectedCategory, setSelectedCategory] = useState(() => searchParams.get('category') || 'all');
   const [priceRange, setPriceRange] = useState([0, 5000]);
   const [selectedRating, setSelectedRating] = useState(0);
   const [sortBy, setSortBy] = useState(() => searchParams.get('sort') || 'popular');
   const [isFilterOpen, setIsFilterOpen] = useState(false);
-  const [page, setPage] = useState(() => parsePage(searchParams.get('page')));
-  const productsPerPage = 9;
+  // Infinite scroll: `page` is how many batches are loaded.
+  const [page, setPage] = useState(1);
+  const productsPerPage = 24;
 
   // Initialize from URL params (keeps position when returning from product page)
   useEffect(() => {
     // The URL is the source of truth: missing params mean the defaults.
     setSelectedCategory(searchParams.get('category') || 'all');
     setSortBy(searchParams.get('sort') || 'popular');
-    setPage(parsePage(searchParams.get('page')));
     // type (retail/closet) is read from searchParams in fetch and classificationParam below
   }, [searchParams]);
 
@@ -63,14 +61,6 @@ function ShopContent() {
     router.push(`${pathname}${params.toString() ? `?${params.toString()}` : ''}`, { scroll: false });
   };
 
-  const goToPage = (newPage: number) => {
-    const params = new URLSearchParams(searchParams.toString());
-    if (newPage <= 1) params.delete('page');
-    else params.set('page', String(newPage));
-    setPage(newPage);
-    router.push(`${pathname}${params.toString() ? `?${params.toString()}` : ''}`);
-  };
-
   // Fetch Categories from cached API
   useEffect(() => {
     async function fetchCategories() {
@@ -87,10 +77,35 @@ function ShopContent() {
     fetchCategories();
   }, []);
 
+  // Anything that changes which products match starts the list again from the top.
+  const filterKey = [
+    selectedCategory, priceRange.join('-'), selectedRating, sortBy,
+    searchParams.get('search') || '', searchParams.get('type') || '', categories.length,
+  ].join('|');
+  const loadedKeyRef = useRef('');
+  const requestRef = useRef(0);
+
+  const firstFilterRef = useRef(true);
+  useEffect(() => {
+    setPage(1);
+    // New filters start a new list, so go back to the top of the results.
+    if (firstFilterRef.current) {
+      firstFilterRef.current = false;
+      return;
+    }
+    const grid = document.querySelector('[data-product-shop]');
+    const top = grid ? grid.getBoundingClientRect().top + window.scrollY - 140 : 0;
+    if (window.scrollY > top) window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+  }, [filterKey]);
+
   // Fetch Products
   useEffect(() => {
+    // A filter change resets page to 1 first; don't append an old page to new filters.
+    if (page > 1 && loadedKeyRef.current !== filterKey) return;
+    const requestId = ++requestRef.current;
     async function fetchProducts() {
-      setLoading(true);
+      if (page === 1) setLoading(true);
+      else setLoadingMore(true);
       try {
         const search = searchParams.get('search');
         const classification = searchParams.get('type'); // 'retail' or 'closet'
@@ -233,20 +248,48 @@ function ShopContent() {
               colorVariants
             };
           });
-          setProducts(formattedProducts);
-          setTotalProducts(count || 0);
+          if (requestId !== requestRef.current) return; // a newer request superseded this one
+          setProducts(prev => {
+            if (page === 1) return formattedProducts;
+            const seen = new Set(prev.map((p: any) => p.id));
+            return [...prev, ...formattedProducts.filter((p: any) => !seen.has(p.id))];
+          });
+          loadedKeyRef.current = filterKey;
+          const loadedSoFar = (page - 1) * productsPerPage + formattedProducts.length;
+          setTotalProducts(count || loadedSoFar);
+          // A short batch means the end, even if the total count is unavailable.
+          setHasMore(formattedProducts.length === productsPerPage && (!count || loadedSoFar < count));
         }
       } catch (err) {
         console.error('Error fetching products:', err);
       } finally {
-        setLoading(false);
+        if (requestId === requestRef.current) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
       }
     }
 
     fetchProducts();
-  }, [selectedCategory, priceRange, selectedRating, sortBy, page, searchParams, categories]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, filterKey]);
 
-  const totalPages = Math.ceil(totalProducts / productsPerPage);
+  const loadMore = useCallback(() => {
+    if (!loading && !loadingMore && hasMore) setPage(p => p + 1);
+  }, [loading, loadingMore, hasMore]);
+
+  // Load the next batch shortly before the shopper reaches the end of the grid.
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !hasMore) return;
+    const observer = new IntersectionObserver(
+      entries => { if (entries[0]?.isIntersecting) loadMore(); },
+      { rootMargin: '800px 0px' }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasMore, loadMore]);
 
   const classificationParam = searchParams.get('type');
   const classificationLabel = classificationParam === 'retail' ? 'Retail Items' : classificationParam === 'closet' ? 'Closet Sales' : null;
@@ -529,31 +572,24 @@ function ShopContent() {
                 </>
               )}
 
-              {/* Pagination */}
-              {totalPages > 1 && (
-                <div className="mt-16 flex justify-center">
-                  <div className="flex items-center space-x-2">
+              {/* Infinite scroll: the sentinel loads the next batch; the button is the fallback. */}
+              {!loading && products.length > 0 && (
+                <div ref={sentinelRef} className="mt-12 flex flex-col items-center gap-3" aria-live="polite">
+                  {loadingMore ? (
+                    <p className="text-gray-500 flex items-center gap-2">
+                      <i className="ri-loader-4-line animate-spin text-xl"></i>
+                      Loading more products…
+                    </p>
+                  ) : hasMore ? (
                     <button
-                      onClick={() => goToPage(Math.max(1, page - 1))}
-                      disabled={page === 1}
-                      className="w-10 h-10 flex items-center justify-center border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      onClick={loadMore}
+                      className="px-6 py-3 border border-gray-300 rounded-lg font-medium text-gray-800 hover:bg-gray-50 transition-colors"
                     >
-                      <i className="ri-arrow-left-s-line text-xl text-gray-700"></i>
+                      Load more products
                     </button>
-
-                    {/* Simple page numbers - condensed for brevity */}
-                    <span className="px-4 font-medium text-gray-700">
-                      Page {page} of {totalPages}
-                    </span>
-
-                    <button
-                      onClick={() => goToPage(Math.min(totalPages, page + 1))}
-                      disabled={page === totalPages}
-                      className="w-10 h-10 flex items-center justify-center border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <i className="ri-arrow-right-s-line text-xl text-gray-700"></i>
-                    </button>
-                  </div>
+                  ) : (
+                    <p className="text-gray-500 text-sm">You&apos;ve seen all {products.length} products</p>
+                  )}
                 </div>
               )}
             </div>

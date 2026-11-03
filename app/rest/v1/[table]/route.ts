@@ -30,6 +30,9 @@ function corsHeaders(): HeadersInit {
     "Access-Control-Allow-Headers":
       "authorization, apikey, content-type, prefer, x-client-info, accept-profile, content-profile",
     "Access-Control-Allow-Methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS",
+    // supabase-js reads totals from Content-Range; browsers hide it cross-origin
+    // (e.g. multimeysupplies.com calling www.multimeysupplies.com) unless exposed.
+    "Access-Control-Expose-Headers": "Content-Range, Content-Profile",
   };
 }
 
