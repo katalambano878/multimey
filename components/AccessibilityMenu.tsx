@@ -16,9 +16,12 @@ export default function AccessibilityMenu() {
   });
 
   useEffect(() => {
-    const saved = localStorage.getItem('accessibilitySettings');
-    if (saved) {
-      setSettings(JSON.parse(saved));
+    try {
+      const saved = localStorage.getItem('accessibilitySettings');
+      const parsed = saved ? JSON.parse(saved) : null;
+      if (parsed && typeof parsed === 'object') setSettings((prev) => ({ ...prev, ...parsed }));
+    } catch {
+      /* ignore corrupt storage */
     }
   }, []);
 

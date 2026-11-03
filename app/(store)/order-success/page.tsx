@@ -74,17 +74,22 @@ function OrderSuccessContent() {
         : '/api/payment/moolre/verify';
       const body = paymentMethod === 'paystack'
         ? JSON.stringify({ orderNumber: orderNum, reference: reference || orderNum })
-        : JSON.stringify({ orderNumber: orderNum, fromRedirect: true });
+        : JSON.stringify({ orderNumber: orderNum });
 
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body,
-      });
+      // Moolre can take a few seconds to settle; ask a few times before giving up.
+      let result: any = null;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 4000));
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+        });
+        result = await res.json().catch(() => null);
+        if (result?.payment_status === 'paid') break;
+      }
 
-      const result = await res.json();
-
-      if (result.success && result.payment_status === 'paid') {
+      if (result?.success && result.payment_status === 'paid') {
         const { data: updated } = await supabase
           .from('orders')
           .select('*, order_items (*)')
@@ -209,7 +214,7 @@ function OrderSuccessContent() {
                   </div>
                 </div>
                 <Link
-                  href="/register"
+                  href="/auth/signup"
                   className="bg-amber-500 hover:bg-amber-600 text-white px-6 py-3 rounded-lg font-semibold transition-colors whitespace-nowrap"
                 >
                   Join Now
@@ -329,7 +334,7 @@ function OrderSuccessContent() {
                 <i className="ri-customer-service-line mr-1"></i>
                 Contact Support
               </Link>
-              <Link href="/account/orders" className="text-gray-900 hover:text-gray-900 font-semibold whitespace-nowrap">
+              <Link href="/account?tab=orders" className="text-gray-900 hover:text-gray-900 font-semibold whitespace-nowrap">
                 <i className="ri-question-line mr-1"></i>
                 Order Help
               </Link>

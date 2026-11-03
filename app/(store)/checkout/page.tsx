@@ -95,7 +95,43 @@ export default function CheckoutPage() {
   const housePickupShippingPrice = parseShippingAmount(getSetting('shipping_house_pickup_price'), 0);
   const shippingCost = deliveryMethod === 'doorstep' ? doorstepShippingPrice : housePickupShippingPrice;
   const tax = 0; // No Tax
-  const total = subtotal + shippingCost + tax;
+
+  // Coupon preview; /api/orders re-checks the code and computes the real discount.
+  const [couponInput, setCouponInput] = useState('');
+  const [coupon, setCoupon] = useState<{ code: string; discount: number; freeShipping: boolean } | null>(null);
+  const [couponError, setCouponError] = useState('');
+  const [couponChecking, setCouponChecking] = useState(false);
+
+  const checkCoupon = async (code: string) => {
+    if (!code.trim()) return;
+    setCouponChecking(true);
+    setCouponError('');
+    try {
+      const res = await fetch('/api/coupons/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, subtotal, shipping: shippingCost, email: shippingData.email }),
+      });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setCoupon(null);
+        setCouponError(result.error || 'That coupon code is not valid.');
+      } else {
+        setCoupon(result);
+      }
+    } finally {
+      setCouponChecking(false);
+    }
+  };
+
+  // Re-check when the cart total or delivery method changes the discount.
+  useEffect(() => {
+    if (coupon) checkCoupon(coupon.code);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subtotal, shippingCost]);
+
+  const discount = coupon?.discount || 0;
+  const total = Math.max(0, subtotal + shippingCost + tax - discount);
 
   const validateShipping = () => {
     const newErrors: any = {};
@@ -144,234 +180,62 @@ export default function CheckoutPage() {
     }
 
     try {
-      const orderNumber = `ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-      // Generate tracking number: SLI-XXXXXX (6-char alphanumeric)
-      const trackingId = Array.from({ length: 6 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('');
-      const trackingNumber = `SLI-${trackingId}`;
-
-      // 1. Create Order
-      const { data: order, error: orderError } = await supabase
-        .from('orders')
-        .insert([{
-          order_number: orderNumber,
-          user_id: user?.id || null, // Capture user_id if logged in
-          email: shippingData.email,
-          phone: shippingData.phone,
-          status: 'pending',
-          payment_status: 'pending',
-          currency: 'GHS',
-          subtotal: subtotal,
-          tax_total: tax,
-          shipping_total: shippingCost,
-          discount_total: 0,
-          total: total,
-          shipping_method: deliveryMethod,
-          payment_method: paymentMethod,
-          shipping_address: shippingData,
-          billing_address: shippingData, // Using same for now
-          metadata: {
-            guest_checkout: !user,
-            first_name: shippingData.firstName,
-            last_name: shippingData.lastName,
-            tracking_number: trackingNumber,
-            payment_method: paymentMethod
-          }
-        }])
-        .select()
-        .single();
-
-      if (orderError) throw orderError;
-
-      // 2. Create Order Items (with UUID validation)
-      // Helper to check if string is a valid UUID
-      const isValidUUID = (str: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
-      
-      // Build order items, resolving slugs to UUIDs if needed
-      const orderItems = [];
-      
-      // Batch-fetch product metadata (for preorder_shipping etc.)
-      const productIds = cart.map(item => item.id).filter(id => isValidUUID(id));
-      const { data: productsData } = productIds.length > 0
-        ? await supabase.from('products').select('id, metadata').eq('status', 'active').in('id', productIds)
-        : { data: [] };
-      const productMetaMap = new Map((productsData || []).map((p: any) => [p.id, p.metadata]));
-      
-      for (const item of cart) {
-        let productId = item.id;
-        
-        // If id is not a valid UUID, it might be a slug - try to resolve it
-        if (!isValidUUID(productId)) {
-          const { data: product } = await supabase
-            .from('products')
-            .select('id, metadata')
-            .eq('status', 'active')
-            .or(`slug.eq.${productId},id.eq.${productId}`)
-            .single();
-          
-          if (product) {
-            productId = product.id;
-            productMetaMap.set(product.id, product.metadata);
-          } else {
-            throw new Error(`Product not found: ${item.name}. Please remove it from your cart and try again.`);
-          }
-        }
-        
-        const prodMeta = productMetaMap.get(productId);
-        
-        orderItems.push({
-          order_id: order.id,
-          product_id: productId,
-          product_name: item.name,
-          variant_name: item.variant,
-          quantity: item.quantity,
-          unit_price: item.price,
-          total_price: item.price * item.quantity,
-          metadata: {
-            image: item.image,
-            slug: item.slug,
-            preorder_shipping: prodMeta?.preorder_shipping || null
-          }
-        });
-      }
-
-      const { error: itemsError } = await supabase
-        .from('order_items')
-        .insert(orderItems);
-
-      if (itemsError) throw itemsError;
-
-      // Note: Stock reduction happens in mark_order_paid when payment is confirmed
-
-      // 3. Upsert Customer Record (for both guest and registered users)
-      const fullName = `${shippingData.firstName} ${shippingData.lastName}`.trim();
-      await supabase.rpc('upsert_customer_from_order', {
-        p_email: shippingData.email,
-        p_phone: shippingData.phone,
-        p_full_name: fullName,
-        p_first_name: shippingData.firstName,
-        p_last_name: shippingData.lastName,
-        p_user_id: user?.id || null,
-        p_address: shippingData
-      });
-
-      // 4. Handle Payment Redirects or Completion
-      if (paymentMethod === 'paystack') {
-        try {
-          const paymentRes = await fetch('/api/payment/paystack', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              orderId: orderNumber,
-              amount: total,
-              customerEmail: shippingData.email,
-            }),
-          });
-          const paymentResult = await paymentRes.json();
-          if (!paymentResult.success) {
-            throw new Error(paymentResult.message || 'Payment initialization failed');
-          }
-          clearCart();
-          window.location.href = paymentResult.url;
-          return;
-        } catch (paymentErr: any) {
-          console.error('Payment Error:', paymentErr);
-          alert('Failed to initialize payment: ' + paymentErr.message);
-          setIsLoading(false);
-          return;
-        }
-      }
-
-      if (paymentMethod === 'moolre') {
-        try {
-          const paymentRes = await fetch('/api/payment/moolre', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              orderId: orderNumber,
-              amount: total,
-              customerEmail: shippingData.email,
-            }),
-          });
-          const paymentResult = await paymentRes.json();
-          if (!paymentResult.success) {
-            throw new Error(paymentResult.message || 'Payment initialization failed');
-          }
-          clearCart();
-          window.location.href = paymentResult.url;
-          return;
-        } catch (paymentErr: any) {
-          console.error('Payment Error:', paymentErr);
-          alert('Failed to initialize payment: ' + paymentErr.message);
-          setIsLoading(false);
-          return;
-        }
-      }
-
-      if (paymentMethod === 'stripe') {
-        try {
-          const paymentRes = await fetch('/api/payment/stripe', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              orderId: orderNumber,
-              amount: total,
-              customerEmail: shippingData.email,
-            }),
-          });
-          const paymentResult = await paymentRes.json();
-          if (!paymentResult.success) {
-            throw new Error(paymentResult.message || 'Payment initialization failed');
-          }
-          clearCart();
-          window.location.href = paymentResult.url;
-          return;
-        } catch (paymentErr: any) {
-          console.error('Payment Error:', paymentErr);
-          alert('Failed to initialize payment: ' + paymentErr.message);
-          setIsLoading(false);
-          return;
-        }
-      }
-
-      if (paymentMethod === 'paypal') {
-        try {
-          const paymentRes = await fetch('/api/payment/paypal', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              orderId: orderNumber,
-              amount: total,
-              customerEmail: shippingData.email,
-            }),
-          });
-          const paymentResult = await paymentRes.json();
-          if (!paymentResult.success) {
-            throw new Error(paymentResult.message || 'Payment initialization failed');
-          }
-          clearCart();
-          window.location.href = paymentResult.url;
-          return;
-        } catch (paymentErr: any) {
-          console.error('Payment Error:', paymentErr);
-          alert('Failed to initialize payment: ' + paymentErr.message);
-          setIsLoading(false);
-          return;
-        }
-      }
-
-      // 5. Send Notifications (For COD or others)
-      fetch('/api/notifications', {
+      // The server prices the cart, checks stock and creates the order.
+      const { data: { session } } = await supabase.auth.getSession();
+      const orderRes = await fetch('/api/orders', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
         body: JSON.stringify({
-          type: 'order_created',
-          payload: order
-        })
-      }).catch(err => console.error('Notification trigger error:', err));
+          items: cart.map(item => ({
+            id: item.id,
+            variant: item.variant ?? null,
+            variantId: item.variantId ?? null,
+            quantity: item.quantity,
+          })),
+          shipping: shippingData,
+          deliveryMethod,
+          paymentMethod,
+          couponCode: coupon?.code || null,
+        }),
+      });
+      const orderResult = await orderRes.json().catch(() => ({}));
+      if (!orderRes.ok || !orderResult.orderNumber) {
+        throw new Error(orderResult.error || 'We could not place your order. Please try again.');
+      }
+      const orderNumber: string = orderResult.orderNumber;
 
-      // 6. Clear Cart & Redirect (For COD)
-      clearCart();
-      router.push(`/order-success?order=${orderNumber}`);
+      // Start payment. The payment route charges the order total stored on the server.
+      const endpoint = {
+        paystack: '/api/payment/paystack',
+        moolre: '/api/payment/moolre',
+        stripe: '/api/payment/stripe',
+        paypal: '/api/payment/paypal',
+      }[paymentMethod];
+
+      try {
+        const paymentRes = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orderId: orderNumber }),
+        });
+        const paymentResult = await paymentRes.json();
+        if (!paymentResult.success) {
+          throw new Error(paymentResult.message || 'Payment initialization failed');
+        }
+        clearCart();
+        window.location.href = paymentResult.url;
+        return;
+      } catch (paymentErr: any) {
+        // The order exists; send the shopper to its payment page so a retry reuses it.
+        console.error('Payment Error:', paymentErr);
+        clearCart();
+        alert('We saved your order but could not open the payment page: ' + paymentErr.message + '\nYou can try paying again on the next page.');
+        router.push(`/pay/${orderNumber}`);
+        return;
+      }
 
     } catch (err: any) {
       console.error('Checkout error:', err);
@@ -774,6 +638,34 @@ export default function CheckoutPage() {
                 shipping={shippingCost}
                 tax={tax}
                 total={total}
+                discount={discount}
+                couponCode={coupon?.code}
+                couponSlot={
+                  coupon ? (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-green-700 font-medium"><i className="ri-coupon-3-line mr-1"></i>{coupon.code} applied</span>
+                      <button type="button" onClick={() => { setCoupon(null); setCouponInput(''); }} className="text-gray-500 hover:text-gray-900 underline">Remove</button>
+                    </div>
+                  ) : (
+                    <form onSubmit={(e) => { e.preventDefault(); checkCoupon(couponInput); }} className="space-y-2">
+                      <label htmlFor="coupon" className="text-sm font-medium text-gray-700">Coupon code</label>
+                      <div className="flex gap-2">
+                        <input
+                          id="coupon"
+                          value={couponInput}
+                          onChange={(e) => setCouponInput(e.target.value.toUpperCase())}
+                          className="flex-1 min-w-0 px-3 py-2 border border-gray-300 rounded-lg text-sm uppercase"
+                          placeholder="Enter code"
+                          autoComplete="off"
+                        />
+                        <button type="submit" disabled={couponChecking || !couponInput.trim()} className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-semibold disabled:opacity-50">
+                          {couponChecking ? 'Checking…' : 'Apply'}
+                        </button>
+                      </div>
+                      {couponError && <p className="text-sm text-red-600">{couponError}</p>}
+                    </form>
+                  )
+                }
               />
             </div>
           </div>

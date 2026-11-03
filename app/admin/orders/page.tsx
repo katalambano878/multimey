@@ -46,6 +46,13 @@ interface OrderStats {
   status: string;
 }
 
+// Quote every cell and neutralise spreadsheet formulas (=, +, -, @) in customer text.
+function csvCell(value: unknown): string {
+  let text = value == null ? '' : String(value);
+  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
 export default function AdminOrdersPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -54,6 +61,10 @@ export default function AdminOrdersPage() {
   const [statusFilter, setStatusFilter] = useState(() => searchParams.get('status') || 'all');
   const [selectedOrders, setSelectedOrders] = useState<string[]>([]);
   const [showFilters, setShowFilters] = useState(false);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [paymentFilter, setPaymentFilter] = useState('all');
+  const [shippingFilter, setShippingFilter] = useState('all');
   const [sortBy, setSortBy] = useState(() => searchParams.get('sort') || 'date');
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
@@ -274,6 +285,14 @@ export default function AdminOrdersPage() {
 
         if (error) throw error;
 
+        // Cancelled/refunded orders give their stock back (the function skips orders already restocked).
+        if (newStatus === 'cancelled' || newStatus === 'refunded') {
+          for (const id of selectedOrders) {
+            const { error: restockError } = await supabase.rpc('restock_order', { p_order_id: id });
+            if (restockError) console.error('Restock failed for', id, restockError.message);
+          }
+        }
+
 
 
         // Send Notifications with auth token
@@ -305,7 +324,7 @@ export default function AdminOrdersPage() {
     } else if (action === 'Export') {
       const ordersToExport = orders.filter(o => selectedOrders.includes(o.id));
       const csvContent = `Order ID,Customer,Email,Date,Items,Total,Status,Payment\n${ordersToExport.map(o =>
-        `${o.order_number || o.id},${getCustomerName(o)},${getCustomerEmail(o)},${formatDate(o.created_at)},${getItemCount(o)},${o.total},${o.status},${o.payment_method || 'N/A'}`
+        [o.order_number || o.id, getCustomerName(o), getCustomerEmail(o), formatDate(o.created_at), getItemCount(o), o.total, o.status, o.payment_method || 'N/A'].map(csvCell).join(',')
       ).join('\n')}`;
       const blob = new Blob([csvContent], { type: 'text/csv' });
       const url = window.URL.createObjectURL(blob);
@@ -321,7 +340,7 @@ export default function AdminOrdersPage() {
 
   const handleExportAll = () => {
     const csvContent = `Order ID,Customer,Email,Date,Items,Total,Status,Payment\n${orders.map(o =>
-      `${o.order_number || o.id},${getCustomerName(o)},${getCustomerEmail(o)},${formatDate(o.created_at)},${getItemCount(o)},${o.total},${o.status},${o.payment_method || 'N/A'}`
+      [o.order_number || o.id, getCustomerName(o), getCustomerEmail(o), formatDate(o.created_at), getItemCount(o), o.total, o.status, o.payment_method || 'N/A'].map(csvCell).join(',')
     ).join('\n')}`;
     const blob = new Blob([csvContent], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
@@ -341,9 +360,13 @@ export default function AdminOrdersPage() {
   const handleResendPaymentLink = async (order: Order) => {
     setSendingPaymentLink(order.id);
     try {
+      const { data: { session } } = await supabase.auth.getSession();
       const response = await fetch('/api/notifications', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session?.access_token && { 'Authorization': `Bearer ${session.access_token}` })
+        },
         body: JSON.stringify({
           type: 'payment_link',
           payload: order
@@ -376,8 +399,23 @@ export default function AdminOrdersPage() {
     const matchesStatus = statusFilter === 'all' || order.status === statusFilter;
     const matchesProduct = productFilter === 'all' || 
       order.order_items?.some((item: any) => item.product_name === productFilter);
-    return matchesViewTab && matchesSearch && matchesStatus && matchesProduct;
+    const created = new Date(order.created_at);
+    const matchesDate =
+      (!dateFrom || created >= new Date(`${dateFrom}T00:00:00`)) &&
+      (!dateTo || created <= new Date(`${dateTo}T23:59:59`));
+    const matchesPayment = paymentFilter === 'all' || (order.payment_method || '') === paymentFilter;
+    const matchesShipping = shippingFilter === 'all' || (order.shipping_method || '') === shippingFilter;
+    return matchesViewTab && matchesSearch && matchesStatus && matchesProduct && matchesDate && matchesPayment && matchesShipping;
+  }).sort((a, b) => {
+    if (sortBy === 'total') return (Number(b.total) || 0) - (Number(a.total) || 0);
+    if (sortBy === 'customer') return getCustomerName(a).localeCompare(getCustomerName(b));
+    if (sortBy === 'status') return String(a.status).localeCompare(String(b.status));
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
   });
+
+  const paymentMethods = Array.from(new Set(orders.map(o => o.payment_method).filter(Boolean))) as string[];
+  const shippingMethods = Array.from(new Set(orders.map(o => o.shipping_method).filter(Boolean))) as string[];
+  const methodLabel = (m: string) => ({ moolre: 'Mobile Money (Moolre)', cash: 'Cash', card: 'Card', doorstep: 'Doorstep delivery', house_pickup: 'House pickup', pickup: 'Pickup', delivery: 'Delivery' } as Record<string, string>)[m] || m;
 
   return (
     <div className="space-y-6">
@@ -530,27 +568,27 @@ export default function AdminOrdersPage() {
           </div>
 
           {showFilters && (
-            <div className="mt-4 p-4 bg-gray-50 rounded-lg grid md:grid-cols-3 gap-4">
+            <div className="mt-4 p-4 bg-gray-50 rounded-lg grid md:grid-cols-4 gap-4">
               <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">Date Range</label>
-                <input type="date" className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg text-sm" />
+                <label className="block text-sm font-semibold text-gray-700 mb-2">From</label>
+                <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg text-sm" />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">To</label>
+                <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg text-sm" />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">Payment Method</label>
-                <select className="w-full px-3 py-2 pr-8 border-2 border-gray-300 rounded-lg text-sm cursor-pointer">
-                  <option>All Methods</option>
-                  <option>Moolre</option>
-                  <option>Mobile Money</option>
-                  <option>Card</option>
+                <select value={paymentFilter} onChange={e => setPaymentFilter(e.target.value)} className="w-full px-3 py-2 pr-8 border-2 border-gray-300 rounded-lg text-sm cursor-pointer">
+                  <option value="all">All Methods</option>
+                  {paymentMethods.map(m => <option key={m} value={m}>{methodLabel(m)}</option>)}
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">Shipping Method</label>
-                <select className="w-full px-3 py-2 pr-8 border-2 border-gray-300 rounded-lg text-sm cursor-pointer">
-                  <option>All Methods</option>
-                  <option>Standard</option>
-                  <option>Express</option>
-                  <option>Store Pickup</option>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Delivery Method</label>
+                <select value={shippingFilter} onChange={e => setShippingFilter(e.target.value)} className="w-full px-3 py-2 pr-8 border-2 border-gray-300 rounded-lg text-sm cursor-pointer">
+                  <option value="all">All Methods</option>
+                  {shippingMethods.map(m => <option key={m} value={m}>{methodLabel(m)}</option>)}
                 </select>
               </div>
             </div>

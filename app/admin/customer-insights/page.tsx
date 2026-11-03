@@ -45,14 +45,15 @@ export default function CustomerInsightsPage() {
       // 2. Fetch Orders for calculations
       const { data: orders, error: orderError } = await supabase
         .from('orders')
-        .select('user_id, total, created_at, status');
+        .select('user_id, total, created_at, status, payment_status');
 
       if (orderError) throw orderError;
 
       // 3. Aggregate Data
-      const aggregated = profiles.map((profile: any) => {
-        const userOrders = orders?.filter(o => o.user_id === profile.id) || [];
-        const totalSpent = userOrders.reduce((sum, o) => sum + (o.total || 0), 0);
+      // Store staff aren't customers; lifetime value counts paid, non-cancelled orders only.
+      const aggregated = profiles.filter((profile: any) => profile.role !== 'admin' && profile.role !== 'staff').map((profile: any) => {
+        const userOrders = orders?.filter(o => o.user_id === profile.id && o.payment_status === 'paid' && o.status !== 'cancelled' && o.status !== 'refunded') || [];
+        const totalSpent = userOrders.reduce((sum, o) => sum + (Number(o.total) || 0), 0);
         const orderCount = userOrders.length;
 
         // Sort orders to find last order
@@ -120,11 +121,28 @@ export default function CustomerInsightsPage() {
 
 
   const filteredCustomers = customers.filter(customer => {
-    const matchesSearch = customer.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      customer.email.toLowerCase().includes(searchTerm.toLowerCase());
+    const term = searchTerm.toLowerCase();
+    const matchesSearch = (customer.name || '').toLowerCase().includes(term) ||
+      (customer.email || '').toLowerCase().includes(term);
     const matchesSegment = selectedSegment === 'all' || customer.segment === selectedSegment;
     return matchesSearch && matchesSegment;
   });
+
+  const exportList = () => {
+    const cell = (v: unknown) => {
+      const text = v == null ? '' : String(v);
+      return `"${(/^[=+\-@]/.test(text) ? `'${text}` : text).replace(/"/g, '""')}"`;
+    };
+    const keys = ['name', 'email', 'phone', 'segment', 'orders', 'totalSpent', 'lastOrder', 'riskLevel'];
+    const lines = [keys.map(cell).join(','), ...filteredCustomers.map(c => keys.map(k => cell(c[k])).join(','))];
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `customer-insights-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
 
   const getSegmentBadge = (segment: string) => {
     const badges: any = {
@@ -166,7 +184,7 @@ export default function CustomerInsightsPage() {
             <p className="text-gray-600 mt-1 md:mt-2 text-sm md:text-base">Deep dive into customer behavior and lifetime value</p>
           </div>
           <div className="flex flex-col sm:flex-row gap-3">
-            <button className="border-2 border-gray-300 hover:border-gray-400 text-gray-700 px-6 py-3 rounded-lg font-semibold transition-colors whitespace-nowrap flex items-center justify-center">
+            <button onClick={exportList} className="border-2 border-gray-300 hover:border-gray-400 text-gray-700 px-6 py-3 rounded-lg font-semibold transition-colors whitespace-nowrap flex items-center justify-center">
               <i className="ri-download-line mr-2"></i>
               Export List
             </button>

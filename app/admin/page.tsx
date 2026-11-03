@@ -61,9 +61,12 @@ export default function AdminDashboard() {
         if (ordersError) throw ordersError;
 
         // Only count PAID orders for revenue & avg order value
-        const paidOrders = allOrdersData?.filter(o => o.payment_status === 'paid') || [];
-        const totalRevenue = paidOrders.reduce((sum, order) => sum + (order.total || 0), 0);
-        const totalOrders = allOrdersData?.length || 0;
+        // Cancelled/refunded sales are excluded so this matches Analytics.
+        const paidOrders = allOrdersData?.filter(o =>
+          o.payment_status === 'paid' && o.status !== 'cancelled' && o.status !== 'refunded'
+        ) || [];
+        const totalRevenue = paidOrders.reduce((sum, order) => sum + (Number(order.total) || 0), 0);
+        const totalOrders = paidOrders.length;
         const paidOrderCount = paidOrders.length;
         const avgOrderValue = paidOrderCount > 0 ? totalRevenue / paidOrderCount : 0;
 
@@ -71,7 +74,7 @@ export default function AdminDashboard() {
         // Since we can't query auth.users directly from client, we'll estimate active customers via orders or just keep it 0 if we can't.
         // Actually, best to just show "Orders" or "Recent Signups" if we had a public profiles table.
         // We'll use unique emails from orders as a proxy for "Customers"
-        const uniqueCustomers = new Set(allOrdersData?.map(o => o.email)).size;
+        const uniqueCustomers = new Set(paidOrders.map(o => o.email).filter(Boolean)).size;
 
 
         // Process Chart Data (Last 7 Days) - only count PAID orders as revenue
@@ -177,19 +180,35 @@ export default function AdminDashboard() {
           })));
         }
 
-        // 5. Fetch Top Products (Approximation: High Price or just Random for now, 
-        // real top selling requires aggregation on order_items which is complex for client-side)
-        // real top selling requires aggregation on order_items which is complex for client-side)
-        const { data: productData } = await supabase.from('products').select('*, product_images(url)').limit(4);
-        if (productData) {
-          setTopProducts(productData.map((p: any) => ({
-            id: p.slug, // Use slug for link
-            name: p.name,
-            image: p.product_images?.[0]?.url || 'https://via.placeholder.com/200',
-            sales: 0, // Mocked for now
-            revenue: 0, // Mocked for now
-            stock: p.quantity
-          })));
+        // 5. Top products by units sold in paid orders
+        const { data: soldItems } = await supabase
+          .from('order_items')
+          .select('product_id, quantity, total_price, orders(payment_status, status)');
+        const totals = new Map<string, { sales: number; revenue: number }>();
+        for (const item of soldItems || []) {
+          const o: any = (item as any).orders;
+          if (!item.product_id || o?.payment_status !== 'paid' || o?.status === 'cancelled' || o?.status === 'refunded') continue;
+          const t = totals.get(item.product_id) || { sales: 0, revenue: 0 };
+          t.sales += Number(item.quantity) || 0;
+          t.revenue += Number(item.total_price) || 0;
+          totals.set(item.product_id, t);
+        }
+        const topIds = Array.from(totals.entries()).sort((a, b) => b[1].sales - a[1].sales).slice(0, 4).map(([id]) => id);
+        if (topIds.length) {
+          const { data: productData } = await supabase.from('products').select('id, name, quantity, product_images(url)').in('id', topIds);
+          setTopProducts(topIds
+            .map(id => (productData || []).find((p: any) => p.id === id))
+            .filter(Boolean)
+            .map((p: any) => ({
+              id: p.id,
+              name: p.name,
+              image: p.product_images?.[0]?.url || 'https://via.placeholder.com/200',
+              sales: totals.get(p.id)!.sales,
+              revenue: totals.get(p.id)!.revenue,
+              stock: p.quantity
+            })));
+        } else {
+          setTopProducts([]);
         }
 
       } catch (error) {

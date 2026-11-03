@@ -4,8 +4,8 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { useState } from 'react';
 import CartCountdown from '@/components/CartCountdown';
-import AdvancedCouponSystem from '@/components/AdvancedCouponSystem';
 import { useCart } from '@/context/CartContext';
+import { useCMS } from '@/context/CMSContext';
 import PageHero from '@/components/PageHero';
 import { usePageTitle } from '@/hooks/usePageTitle';
 import AnimatedSection from '@/components/AnimatedSection';
@@ -13,7 +13,7 @@ import AnimatedSection from '@/components/AnimatedSection';
 export default function CartPage() {
   usePageTitle('Shopping Cart');
   const { cart: cartItems, removeFromCart, updateQuantity, subtotal, addToCart } = useCart();
-  const [appliedCoupon, setAppliedCoupon] = useState<any>(null);
+  const { getSetting } = useCMS();
   const [savedItems, setSavedItems] = useState<any[]>([]);
 
   // Function to move item to saved for later (local state only for now)
@@ -34,29 +34,14 @@ export default function CartPage() {
     }
   };
 
-  const applyCoupon = (coupon: any) => {
-    setAppliedCoupon(coupon);
-  };
-
-  const removeCoupon = () => {
-    setAppliedCoupon(null);
-  };
-
   // Savings calculation is tricky without originalPrice in Context.
   // Assuming 0 for now unless we update Context.
   const savings = 0;
 
-  let couponDiscount = 0;
-  if (appliedCoupon) {
-    if (appliedCoupon.type === 'percentage') {
-      couponDiscount = subtotal * (appliedCoupon.discount / 100);
-    } else {
-      couponDiscount = appliedCoupon.discount;
-    }
-  }
-
-  const shipping = subtotal >= 200 ? 0 : 15;
-  const total = subtotal - couponDiscount + shipping;
+  // Delivery is chosen at checkout (doorstep vs pickup), so the cart only
+  // shows the subtotal and the doorstep fee from settings for reference.
+  const parsedDoorstep = parseFloat(getSetting('shipping_doorstep_price') || '');
+  const doorstepPrice = Number.isFinite(parsedDoorstep) && parsedDoorstep >= 0 ? parsedDoorstep : 50;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -207,40 +192,21 @@ export default function CartPage() {
                         <span className="font-semibold">GH₵{subtotal.toFixed(2)}</span>
                       </div>
 
-                      {appliedCoupon && (
-                        <div className="flex justify-between text-gray-900">
-                          <div className="flex items-center space-x-2">
-                            <span>Coupon ({appliedCoupon.code})</span>
-                          </div>
-                          <span className="font-semibold">-GH₵{couponDiscount.toFixed(2)}</span>
-                        </div>
-                      )}
-
-                      <div className="flex justify-between text-gray-700">
-                        <span>Shipping</span>
-                        <span className="font-semibold">{shipping === 0 ? 'FREE' : `GH₵${shipping.toFixed(2)}`}</span>
+                      <div className="flex justify-between gap-4 text-gray-700">
+                        <span>Delivery</span>
+                        <span className="font-semibold text-right">Calculated at checkout</span>
                       </div>
-
-                      {shipping > 0 && (
-                        <p className="text-sm text-amber-600">
-                          {/* Shipping threshold text removed */}
-                        </p>
-                      )}
+                      <p className="text-xs text-gray-500">
+                        Doorstep delivery is GH₵{doorstepPrice.toFixed(2)}; pickup options are shown at checkout.
+                      </p>
                     </div>
 
                     <div className="border-t border-gray-200 pt-4 mb-6">
                       <div className="flex justify-between text-xl font-bold text-gray-900">
-                        <span>Total</span>
-                        <span>GH₵{total.toFixed(2)}</span>
+                        <span>Total <span className="text-sm font-normal text-gray-500">(before delivery)</span></span>
+                        <span>GH₵{subtotal.toFixed(2)}</span>
                       </div>
                     </div>
-
-                    <AdvancedCouponSystem
-                      subtotal={subtotal}
-                      onApply={applyCoupon}
-                      onRemove={removeCoupon}
-                      appliedCoupon={appliedCoupon}
-                    />
 
                     <Link
                       href="/checkout"

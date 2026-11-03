@@ -2,7 +2,7 @@ import { MetadataRoute } from 'next';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+  const baseUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://www.multimeysupplies.com').replace(/\/+$/, '');
 
   // Static pages
   const staticPages: MetadataRoute.Sitemap = [
@@ -34,9 +34,9 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       .eq('status', 'active');
 
     if (products) {
-      productPages = products.map((product) => ({
+      productPages = products.map((product: any) => ({
         url: `${baseUrl}/product/${product.slug}`,
-        lastModified: new Date(product.updated_at),
+        lastModified: product.updated_at ? new Date(product.updated_at) : new Date(),
         changeFrequency: 'weekly' as const,
         priority: 0.7,
       }));
@@ -49,9 +49,9 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       .eq('status', 'active');
 
     if (categories) {
-      categoryPages = categories.map((category) => ({
-        url: `${baseUrl}/category/${category.slug}`,
-        lastModified: new Date(category.updated_at),
+      categoryPages = categories.map((category: any) => ({
+        url: `${baseUrl}/shop?category=${encodeURIComponent(category.slug)}`,
+        lastModified: category.updated_at ? new Date(category.updated_at) : new Date(),
         changeFrequency: 'weekly' as const,
         priority: 0.6,
       }));

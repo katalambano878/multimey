@@ -22,25 +22,37 @@ export default function CustomerDetailsPage() {
 
     const fetchCustomerData = async () => {
         try {
-            // 1. Fetch Profile
-            const { data: profile, error: profileError } = await supabase
-                .from('profiles')
+            // The customers list links customers.id; accounts without a customer row link a profile id.
+            let { data: profile } = await supabase
+                .from('customers')
                 .select('*')
                 .eq('id', customerId)
-                .single();
-
-            if (profileError) throw profileError;
-
-            // 2. Fetch Orders
-            const { data: ordersData, error: ordersError } = await supabase
-                .from('orders')
-                .select('*')
-                .eq('user_id', customerId)
-                .order('created_at', { ascending: false });
-
-            if (ordersError && ordersError.code !== 'PGRST116') { // Ignore not found if simply no orders? No, select returns empty array usually
-                // Actually select returns empty array if no match, not error.
+                .maybeSingle();
+            if (!profile) {
+                const { data: accountProfile } = await supabase
+                    .from('profiles')
+                    .select('*')
+                    .eq('id', customerId)
+                    .maybeSingle();
+                profile = accountProfile ? { ...accountProfile, user_id: accountProfile.id } : null;
             }
+            if (!profile) throw new Error('Customer not found');
+
+            // Orders placed with any of the customer's emails, or by their account.
+            const emails = [profile.email, profile.secondary_email].filter(Boolean);
+            const [byEmail, byUser] = await Promise.all([
+                emails.length
+                    ? supabase.from('orders').select('*').in('email', emails)
+                    : Promise.resolve({ data: [] as any[] }),
+                profile.user_id
+                    ? supabase.from('orders').select('*').eq('user_id', profile.user_id)
+                    : Promise.resolve({ data: [] as any[] }),
+            ]);
+            const merged = new Map<string, any>();
+            for (const o of [...(byEmail.data || []), ...(byUser.data || [])]) merged.set(o.id, o);
+            const ordersData = Array.from(merged.values()).sort(
+                (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+            );
 
             setCustomer(profile);
             setOrders(ordersData || []);
@@ -54,7 +66,9 @@ export default function CustomerDetailsPage() {
     if (loading) return <div className="p-8 text-center text-gray-500">Loading customer details...</div>;
     if (!customer) return <div className="p-8 text-center text-red-500">Customer not found</div>;
 
-    const totalSpent = orders.reduce((sum, order) => sum + (order.total || 0), 0);
+    const totalSpent = orders
+        .filter(order => order.payment_status === 'paid' && order.status !== 'cancelled' && order.status !== 'refunded')
+        .reduce((sum, order) => sum + (Number(order.total) || 0), 0);
 
     return (
         <div className="max-w-7xl mx-auto">
@@ -65,7 +79,7 @@ export default function CustomerDetailsPage() {
                         <i className="ri-arrow-left-line text-xl"></i>
                     </Link>
                     <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center text-gray-700 text-2xl font-bold">
-                        {customer.full_name?.charAt(0) || customer.email.charAt(0).toUpperCase()}
+                        {(customer.full_name || customer.email || '?').charAt(0).toUpperCase()}
                     </div>
                     <div>
                         <h1 className="text-3xl font-bold text-gray-900">{customer.full_name || 'No Name'}</h1>
@@ -73,13 +87,18 @@ export default function CustomerDetailsPage() {
                     </div>
                 </div>
                 <div className="flex space-x-3">
-                    <button className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 font-medium hover:bg-gray-50 cursor-pointer">
-                        <i className="ri-mail-send-line mr-2"></i>
-                        Send Email
-                    </button>
-                    <button className="px-4 py-2 bg-gray-600 text-white rounded-lg font-bold hover:bg-gray-700 cursor-pointer">
-                        Edit Customer
-                    </button>
+                    {customer.email && !String(customer.email).endsWith('@pos.local') && (
+                        <a href={`mailto:${customer.email}`} className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 font-medium hover:bg-gray-50 cursor-pointer">
+                            <i className="ri-mail-send-line mr-2"></i>
+                            Send Email
+                        </a>
+                    )}
+                    {customer.phone && (
+                        <a href={`https://wa.me/${String(customer.phone).replace(/\D/g, '').replace(/^0/, '233')}`} target="_blank" rel="noopener noreferrer" className="px-4 py-2 bg-gray-900 text-white rounded-lg font-bold hover:bg-gray-800 cursor-pointer">
+                            <i className="ri-whatsapp-line mr-2"></i>
+                            WhatsApp
+                        </a>
+                    )}
                 </div>
             </div>
 
@@ -128,7 +147,7 @@ export default function CustomerDetailsPage() {
                             {orders.map(order => (
                                 <tr key={order.id} className="hover:bg-gray-50">
                                     <td className="px-6 py-4 text-sm font-medium text-gray-600">
-                                        <Link href={`/admin/orders/${order.id}`}>#{order.id.slice(0, 8)}</Link>
+                                        <Link href={`/admin/orders/${order.id}`}>{order.order_number || `#${order.id.slice(0, 8)}`}</Link>
                                     </td>
                                     <td className="px-6 py-4 text-sm text-gray-600">
                                         {new Date(order.created_at).toLocaleDateString()}

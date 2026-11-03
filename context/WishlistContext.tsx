@@ -32,13 +32,12 @@ export function WishlistProvider({ children }: { children: ReactNode }) {
 
     // Load wishlist from localStorage on mount
     useEffect(() => {
-        const savedWishlist = localStorage.getItem('wishlist');
-        if (savedWishlist) {
-            try {
-                setWishlist(JSON.parse(savedWishlist));
-            } catch (e) {
-                console.error('Failed to parse wishlist:', e);
-            }
+        try {
+            const savedWishlist = localStorage.getItem('wishlist');
+            const parsed = savedWishlist ? JSON.parse(savedWishlist) : [];
+            if (Array.isArray(parsed)) setWishlist(parsed);
+        } catch (e) {
+            console.error('Failed to load wishlist:', e);
         }
         setIsInitialized(true);
     }, []);
@@ -46,7 +45,11 @@ export function WishlistProvider({ children }: { children: ReactNode }) {
     // Save wishlist to localStorage whenever it changes
     useEffect(() => {
         if (isInitialized) {
-            localStorage.setItem('wishlist', JSON.stringify(wishlist));
+            try {
+                localStorage.setItem('wishlist', JSON.stringify(wishlist));
+            } catch {
+                /* storage full or blocked */
+            }
         }
     }, [wishlist, isInitialized]);
 

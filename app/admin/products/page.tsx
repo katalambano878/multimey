@@ -149,12 +149,11 @@ export default function ProductsPage() {
     }
   };
 
+  // Select-all only covers the products currently shown by search/filters.
   const handleSelectAll = () => {
-    if (selectedProducts.length === products.length) {
-      setSelectedProducts([]);
-    } else {
-      setSelectedProducts(products.map(p => p.id));
-    }
+    const visibleIds = filteredProducts.map(p => p.id);
+    const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedProducts.includes(id));
+    setSelectedProducts(allVisibleSelected ? [] : visibleIds);
   };
 
   const handleSelectProduct = (productId: string) => {
@@ -165,26 +164,51 @@ export default function ProductsPage() {
     }
   };
 
-  const deleteProductsById = async (ids: string[]): Promise<string | null> => {
-    // Nullify order_items references to preserve order history
-    await supabase.from('order_items').update({ product_id: null }).in('product_id', ids);
+  // Products that appear in past orders are archived instead of deleted, so
+  // order history keeps its product links. Each step stops on the first error.
+  const deleteProductsById = async (ids: string[]): Promise<{ error: string | null; archived: number }> => {
+    const { data: ordered, error: orderedError } = await supabase
+      .from('order_items')
+      .select('product_id')
+      .in('product_id', ids);
+    if (orderedError) return { error: orderedError.message, archived: 0 };
 
-    // Delete all other related records
-    for (const table of ['product_images', 'product_variants', 'cart_items', 'wishlist_items', 'reviews']) {
-      const { error } = await supabase.from(table).delete().in('product_id', ids);
-      if (error) console.warn(`Could not delete from ${table}:`, error.message);
+    const orderedIds = Array.from(new Set((ordered || []).map((r: any) => r.product_id)));
+    const deletable = ids.filter(id => !orderedIds.includes(id));
+
+    if (orderedIds.length) {
+      const { error } = await supabase.from('products').update({ status: 'archived' }).in('id', orderedIds);
+      if (error) return { error: error.message, archived: 0 };
     }
 
-    const { error } = await supabase.from('products').delete().in('id', ids);
-    return error ? error.message : null;
+    if (deletable.length) {
+      const { data: reviewRows } = await supabase.from('reviews').select('id').in('product_id', deletable);
+      const reviewIds = (reviewRows || []).map((r: any) => r.id);
+      if (reviewIds.length) {
+        const { error } = await supabase.from('review_images').delete().in('review_id', reviewIds);
+        if (error) return { error: error.message, archived: orderedIds.length };
+      }
+      for (const table of ['cart_items', 'wishlist_items', 'reviews', 'product_images', 'product_variants']) {
+        const { error } = await supabase.from(table).delete().in('product_id', deletable);
+        if (error) return { error: `${table}: ${error.message}`, archived: orderedIds.length };
+      }
+      const { error } = await supabase.from('products').delete().in('id', deletable);
+      if (error) return { error: error.message, archived: orderedIds.length };
+    }
+    return { error: null, archived: orderedIds.length };
   };
 
   const handleDeleteProduct = async (productId: string) => {
     if (confirm('Are you sure you want to delete this product?')) {
-      const error = await deleteProductsById([productId]);
+      const { error, archived } = await deleteProductsById([productId]);
       if (!error) {
-        setProducts(products.filter(p => p.id !== productId));
-        alert('Product deleted successfully');
+        if (archived) {
+          setProducts(products.map(p => (p.id === productId ? { ...p, status: 'archived' } : p)));
+          alert('This product has past orders, so it was archived instead of deleted. It no longer shows in the shop.');
+        } else {
+          setProducts(products.filter(p => p.id !== productId));
+          alert('Product deleted successfully');
+        }
       } else {
         alert('Error deleting product: ' + error);
       }
@@ -193,11 +217,13 @@ export default function ProductsPage() {
 
   const handleBulkDelete = async () => {
     if (confirm(`Are you sure you want to delete ${selectedProducts.length} products?`)) {
-      const error = await deleteProductsById(selectedProducts);
+      const { error, archived } = await deleteProductsById(selectedProducts);
       if (!error) {
-        setProducts(products.filter(p => !selectedProducts.includes(p.id)));
         setSelectedProducts([]);
-        alert('Products deleted successfully');
+        await fetchProducts();
+        alert(archived
+          ? `Done. ${archived} product${archived === 1 ? ' has' : 's have'} past orders, so ${archived === 1 ? 'it was' : 'they were'} archived instead of deleted.`
+          : 'Products deleted successfully');
       } else {
         alert('Error deleting products: ' + error);
       }
@@ -379,7 +405,7 @@ export default function ProductsPage() {
                   <th className="py-4 px-6">
                     <input
                       type="checkbox"
-                      checked={selectedProducts.length === products.length && products.length > 0}
+                      checked={filteredProducts.length > 0 && filteredProducts.every(p => selectedProducts.includes(p.id))}
                       onChange={handleSelectAll}
                       className="w-4 h-4 text-gray-900 border-gray-300 rounded focus:ring-gray-600 cursor-pointer"
                     />

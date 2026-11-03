@@ -66,9 +66,12 @@ export default function AdvancedSearch() {
   ];
 
   useEffect(() => {
-    const saved = localStorage.getItem('recentSearches');
-    if (saved) {
-      setRecentSearches(JSON.parse(saved));
+    try {
+      const saved = localStorage.getItem('recentSearches');
+      const parsed = saved ? JSON.parse(saved) : [];
+      if (Array.isArray(parsed)) setRecentSearches(parsed);
+    } catch {
+      /* ignore corrupt storage */
     }
   }, []);
 

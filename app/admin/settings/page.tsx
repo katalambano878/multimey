@@ -95,12 +95,12 @@ export default function SettingsPage() {
         try {
             // Upsert each setting
             const entries = Object.entries(settings).filter(([_, v]) => v !== undefined);
-            for (const [key, value] of entries) {
-                await supabase.from('store_settings').upsert(
-                    { key, value, updated_at: new Date().toISOString() },
-                    { onConflict: 'key' }
-                );
-            }
+            const now = new Date().toISOString();
+            const { error } = await supabase.from('store_settings').upsert(
+                entries.map(([key, value]) => ({ key, value, updated_at: now })),
+                { onConflict: 'key' }
+            );
+            if (error) throw error;
             setSaved(true);
             setTimeout(() => setSaved(false), 3000);
         } catch (err) {

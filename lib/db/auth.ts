@@ -167,7 +167,7 @@ export async function signInWithPassword(
   if (!row?.encrypted_password) {
     return { session: null, error: "Invalid login credentials" };
   }
-  const ok = bcrypt.compareSync(password, row.encrypted_password);
+  const ok = await bcrypt.compare(password, row.encrypted_password);
   if (!ok) {
     return { session: null, error: "Invalid login credentials" };
   }
@@ -199,7 +199,7 @@ export async function signUpWithPassword(opts: {
   }
 
   const id = randomUUID();
-  const hash = bcrypt.hashSync(opts.password, 10);
+  const hash = await bcrypt.hash(opts.password, 10);
   const meta = opts.data || {};
 
   await query(
@@ -220,8 +220,14 @@ export async function signUpWithPassword(opts: {
   await query(
     `INSERT INTO profiles (id, email, full_name, role, created_at, updated_at)
      VALUES ($1, $2, $3, 'customer', now(), now())
-     ON CONFLICT (id) DO NOTHING`,
-    [id, email, (meta.full_name as string) || email.split("@")[0]]
+     ON CONFLICT (id) DO UPDATE SET full_name = COALESCE(profiles.full_name, EXCLUDED.full_name)`,
+    [
+      id,
+      email,
+      (meta.full_name as string) ||
+        [meta.first_name, meta.last_name].filter((v) => typeof v === "string" && v).join(" ") ||
+        email.split("@")[0],
+    ]
   ).catch(() => {});
 
   const { rows } = await query(`SELECT * FROM auth.users WHERE id = $1`, [id]);
@@ -263,7 +269,7 @@ export async function updateUserPassword(
   if (!password || password.length < 6) {
     return { user: null, error: "Password must be at least 6 characters" };
   }
-  const hash = bcrypt.hashSync(password, 10);
+  const hash = await bcrypt.hash(password, 10);
   await query(
     `UPDATE auth.users SET encrypted_password = $1, updated_at = now() WHERE id = $2`,
     [hash, userId]

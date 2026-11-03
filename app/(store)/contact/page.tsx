@@ -2,7 +2,6 @@
 
 import { useState, type FormEvent } from 'react';
 import { useCMS } from '@/context/CMSContext';
-import { supabase } from '@/lib/supabase';
 import { usePageTitle } from '@/hooks/usePageTitle';
 import { useRecaptcha } from '@/hooks/useRecaptcha';
 import AnimatedSection from '@/components/AnimatedSection';
@@ -41,30 +40,26 @@ export default function ContactPage() {
     }
 
     try {
-      // Store in Supabase
-      const { error } = await supabase
-        .from('contact_submissions')
-        .insert({
-          name: formData.name,
-          email: formData.email,
-          phone: formData.phone,
-          subject: formData.subject,
-          message: formData.message,
-        });
-
-      if (error) {
-        console.log('Note: contact_submissions table may not exist');
-      }
-
-      // Send Contact Notification
-      fetch('/api/notifications', {
+      const res = await fetch('/api/notifications', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           type: 'contact',
-          payload: formData
-        })
-      }).catch(err => console.error('Contact notification error:', err));
+          payload: {
+            name: formData.name,
+            email: formData.email,
+            subject: formData.subject,
+            message: formData.phone.trim()
+              ? `${formData.message}\n\nPhone: ${formData.phone.trim()}`
+              : formData.message,
+          },
+        }),
+      });
+
+      if (!res.ok) {
+        setSubmitStatus('error');
+        return;
+      }
 
       setSubmitStatus('success');
       setFormData({ name: '', email: '', phone: '', subject: '', message: '' });
@@ -78,6 +73,8 @@ export default function ContactPage() {
   // CMS-driven config (fallbacks = store details)
   const contactEmail = getSetting('contact_email') || 'info@multimeysupplies.com';
   const contactPhone = getSetting('contact_phone') || '+233209597443';
+  const whatsappNumber = getSetting('social_whatsapp') || contactPhone;
+  const whatsappLink = `https://wa.me/${whatsappNumber.replace(/\D/g, '')}`;
   const contactAddress = getSetting('contact_address') || 'Accra, Ghana';
   const heroTitle = getSetting('contact_hero_title') || 'Get In Touch';
   const heroSubtitle = getSetting('contact_hero_subtitle') || 'We\'d love to hear from you. Our team is always here to chat.';
@@ -87,6 +84,13 @@ export default function ContactPage() {
   const teamContacts = getSettingJSON('contact_team_json', []) as TeamContact[];
 
   const contactMethods = [
+    {
+      icon: 'ri-whatsapp-line',
+      title: 'WhatsApp',
+      value: whatsappNumber,
+      link: whatsappLink,
+      description: getSetting('contact_whatsapp_hours') || 'No calls. But chat with us instantly.'
+    },
     {
       icon: 'ri-snapchat-line',
       title: 'Snapchat',
@@ -100,13 +104,6 @@ export default function ContactPage() {
       value: contactEmail,
       link: `mailto:${contactEmail}`,
       description: 'We respond within 24 hours'
-    },
-    {
-      icon: 'ri-whatsapp-line',
-      title: 'WhatsApp',
-      value: contactPhone,
-      link: `https://wa.me/${(contactPhone || '').replace(/\D/g, '')}`,
-      description: getSetting('contact_whatsapp_hours') || 'No calls. But chat with us instantly.'
     },
     {
       icon: 'ri-map-pin-line',
@@ -202,7 +199,18 @@ export default function ContactPage() {
           <AnimatedSection direction="right" delay={0.2} className="lg:col-span-2">
             <div className="bg-white rounded-3xl shadow-xl p-8 lg:p-12 border border-gray-100 hover-lift">
               <h2 className="text-3xl font-bold text-gray-900 mb-2">Send us a Message</h2>
-              <p className="text-gray-500 mb-10">Fill out the form below and we'll get back to you shortly.</p>
+              <p className="text-gray-500 mb-6">Fill out the form below and we'll get back to you shortly.</p>
+              <a
+                href={whatsappLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mb-10 flex items-center gap-3 rounded-xl border border-green-200 bg-green-50 px-5 py-4 text-green-900 hover:bg-green-100 transition-colors"
+              >
+                <i className="ri-whatsapp-line text-2xl text-green-600"></i>
+                <span className="text-sm">
+                  <span className="font-bold">Need a fast reply?</span> Chat with us on WhatsApp at {whatsappNumber}.
+                </span>
+              </a>
 
               <form onSubmit={handleSubmit} className="space-y-6">
                 <div className="grid md:grid-cols-2 gap-6">
@@ -275,8 +283,8 @@ export default function ContactPage() {
                   <div className="bg-green-50 border border-green-200 text-green-800 px-6 py-4 rounded-xl flex items-center gap-3">
                     <i className="ri-checkbox-circle-fill text-xl"></i>
                     <div>
-                      <p className="font-bold">Message Sent!</p>
-                      <p className="text-sm">We'll get back to you within 24 hours.</p>
+                      <p className="font-bold">Thanks — we&apos;ve received your message.</p>
+                      <p className="text-sm">For a faster reply, chat with us on WhatsApp.</p>
                     </div>
                   </div>
                 )}
@@ -285,8 +293,11 @@ export default function ContactPage() {
                   <div className="bg-red-50 border border-red-200 text-red-800 px-6 py-4 rounded-xl flex items-center gap-3">
                     <i className="ri-error-warning-fill text-xl"></i>
                     <div>
-                      <p className="font-bold">Failed to send</p>
-                      <p className="text-sm">Please try again or contact us directly.</p>
+                      <p className="font-bold">We couldn&apos;t send your message</p>
+                      <p className="text-sm">
+                        Please try again, or{' '}
+                        <a href={whatsappLink} target="_blank" rel="noopener noreferrer" className="underline font-semibold">message us on WhatsApp</a>.
+                      </p>
                     </div>
                   </div>
                 )}

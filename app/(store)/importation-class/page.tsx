@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { usePageTitle } from '@/hooks/usePageTitle';
 import Link from 'next/link';
+import { COURSE_PRICE, COURSE_TITLE } from '@/lib/course';
 
 export default function ImportationClassPage() {
   usePageTitle('Register for 1v1 Online Importation Class');
@@ -16,9 +17,32 @@ export default function ImportationClassPage() {
   });
   const [errors, setErrors] = useState<any>({});
   const [isLoading, setIsLoading] = useState(false);
+  const [paymentState, setPaymentState] = useState<'idle' | 'checking' | 'paid' | 'pending'>('idle');
 
-  const COURSE_PRICE = 500;
-  const COURSE_TITLE = '1v1 Online Importation Class';
+  // Back from Moolre: confirm the payment with the server before thanking the student.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const registration = params.get('registration');
+    if (!registration || params.get('payment_success') !== 'true') return;
+    setPaymentState('checking');
+    (async () => {
+      for (let attempt = 0; attempt < 4; attempt++) {
+        if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 4000));
+        const res = await fetch('/api/payment/moolre/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orderNumber: registration }),
+        });
+        const result = await res.json().catch(() => null);
+        if (result?.payment_status === 'paid') {
+          setPaymentState('paid');
+          return;
+        }
+      }
+      setPaymentState('pending');
+    })();
+  }, []);
+
 
   const validate = () => {
     const newErrors: any = {};
@@ -80,6 +104,36 @@ export default function ImportationClassPage() {
       setIsLoading(false);
     }
   };
+
+  if (paymentState !== 'idle') {
+    return (
+      <main className="min-h-screen bg-brand-light flex items-center justify-center px-4 py-20">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 max-w-md w-full text-center">
+          {paymentState === 'checking' ? (
+            <>
+              <i className="ri-loader-4-line text-4xl text-gray-700 animate-spin mb-4 block"></i>
+              <h1 className="text-xl font-bold text-gray-900 mb-2">Confirming your payment…</h1>
+              <p className="text-gray-600">This takes a few seconds.</p>
+            </>
+          ) : paymentState === 'paid' ? (
+            <>
+              <i className="ri-checkbox-circle-line text-5xl text-green-600 mb-4 block"></i>
+              <h1 className="text-xl font-bold text-gray-900 mb-2">You&apos;re registered!</h1>
+              <p className="text-gray-600 mb-6">Payment received for the {COURSE_TITLE}. We&apos;ll contact you on WhatsApp to book your session.</p>
+              <Link href="/" className="inline-block bg-gray-900 text-white px-6 py-3 rounded-lg font-semibold hover:bg-gray-800">Back to the shop</Link>
+            </>
+          ) : (
+            <>
+              <i className="ri-time-line text-5xl text-amber-500 mb-4 block"></i>
+              <h1 className="text-xl font-bold text-gray-900 mb-2">Payment not confirmed yet</h1>
+              <p className="text-gray-600 mb-6">If money left your Mobile Money wallet, it will show up shortly and we&apos;ll contact you. You don&apos;t need to pay again.</p>
+              <Link href="/contact" className="inline-block bg-gray-900 text-white px-6 py-3 rounded-lg font-semibold hover:bg-gray-800">Contact us</Link>
+            </>
+          )}
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-brand-light">

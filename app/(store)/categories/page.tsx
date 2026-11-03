@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { supabase } from '@/lib/supabase';
+import { supabaseAdmin as supabase } from '@/lib/supabase-admin';
 import ScrollReveal from '@/components/ScrollReveal';
 
 export const revalidate = 0;
@@ -18,7 +18,7 @@ export default async function CategoriesPage() {
     .eq('status', 'active')
     .order('position', { ascending: true });
 
-  const categories = categoriesData?.map((c) => {
+  const categories = categoriesData?.map((c: any) => {
     return {
       ...c,
       image: c.image_url || 'https://images.unsplash.com/photo-1560869713-7d0a29430803?q=80&w=2626&auto=format&fit=crop',
@@ -47,7 +47,7 @@ export default async function CategoriesPage() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 lg:py-24">
         {categories.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 lg:gap-12">
-            {categories.map((category) => (
+            {categories.map((category: any) => (
               <ScrollReveal 
                 key={category.id} 
                 direction="up"

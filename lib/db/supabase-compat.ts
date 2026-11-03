@@ -32,6 +32,7 @@ type Op = "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "like" | "ilike" | "is" |
 
 interface Filter {
   kind: "cmp" | "in" | "is" | "or" | "notIn" | "notIs" | "raw";
+  raw?: RawFilter;
   col?: string;
   op?: string;
   value?: any;
@@ -40,6 +41,14 @@ interface Filter {
   sql?: string;
   params?: any[];
 }
+
+/** Row filter added by the access layer; never built from request input. */
+export interface RawFilter {
+  build(push: (value: unknown) => string): string;
+}
+
+/** Returns extra conditions for rows of `table` read as an embed of `parent`, or "deny". */
+export type EmbedPolicy = (table: string, parent: string) => RawFilter | null | "deny";
 
 interface OrderSpec {
   col: string;
@@ -286,9 +295,58 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any; count: number
   private onConflictCols: string[] | null = null;
   private returnRows = false;
   private singleMode: "none" | "single" | "maybe" = "none";
+  private embedPolicy: EmbedPolicy | null = null;
+  private ignoreDuplicates = false;
 
   constructor(table: string) {
     this.table = table;
+  }
+
+  /** Access layer: restrict rows with a server-built condition. */
+  where(raw: RawFilter) {
+    this.filters.push({ kind: "raw", raw });
+    return this;
+  }
+
+  /** Access layer: decide which embedded rows the caller may see. */
+  withEmbedPolicy(policy: EmbedPolicy) {
+    this.embedPolicy = policy;
+    return this;
+  }
+
+  get tableName() {
+    return this.table;
+  }
+
+  get actionName() {
+    return this.action;
+  }
+
+  get selectString() {
+    return this.selectStr;
+  }
+
+  get hasFilters() {
+    return this.filters.some((f) => f.kind !== "raw");
+  }
+
+  /** Tables reached by embedded-column filters such as `categories.slug=eq.x`. */
+  embeddedFilterTables(): string[] {
+    const embeds = parseSelect(this.selectStr).embeds;
+    const out: string[] = [];
+    for (const f of this.filters) {
+      if (f.kind === "raw" || !f.col || !f.col.includes(".") || JSON_PATH_RE.test(f.col)) continue;
+      const alias = f.col.slice(0, f.col.indexOf("."));
+      out.push(embeds.find((e) => e.alias === alias)?.table ?? alias);
+    }
+    return out;
+  }
+
+  /** True when the request pins `col` to one exact value (eq filter at top level). */
+  hasEqFilter(col: string): boolean {
+    return this.filters.some(
+      (f) => f.kind === "cmp" && f.op === "eq" && f.col === col && f.value != null && f.value !== ""
+    );
   }
 
   select(sel = "*", opts?: { count?: "exact" | "planned" | "estimated"; head?: boolean }) {
@@ -317,9 +375,10 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any; count: number
     this.payload = patch;
     return this;
   }
-  upsert(payload: Row | Row[], opts?: { onConflict?: string }) {
+  upsert(payload: Row | Row[], opts?: { onConflict?: string; ignoreDuplicates?: boolean }) {
     this.action = "upsert";
     this.payload = payload;
+    this.ignoreDuplicates = !!opts?.ignoreDuplicates;
     this.onConflictCols = opts?.onConflict
       ? opts.onConflict.split(",").map((c) => c.trim())
       : null;
@@ -380,10 +439,14 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any; count: number
     return this;
   }
   limit(n: number) {
+    if (!Number.isInteger(n) || n < 0) throw new Error(`Invalid limit: ${n}`);
     this.limitN = n;
     return this;
   }
   range(from: number, to: number) {
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from - 1) {
+      throw new Error(`Invalid range: ${from}-${to}`);
+    }
     this.rangeFrom = from;
     this.rangeTo = to;
     return this;
@@ -408,7 +471,7 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any; count: number
   private buildWhere(params: any[]): string {
     const clauses: string[] = [];
     for (const f of this.filters) {
-      const dot = f.col ? f.col.indexOf(".") : -1;
+      const dot = f.kind !== "raw" && f.col ? f.col.indexOf(".") : -1;
       if (dot === -1) {
         clauses.push(this.filterClause(f, params));
       } else {
@@ -443,6 +506,12 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any; count: number
     if (f.kind === "is") return this.isClause(f.col!, f.value);
     if (f.kind === "notIs") return `NOT (${this.isClause(f.col!, f.value)})`;
     if (f.kind === "or") return this.orClause(f.orParts!, params);
+    if (f.kind === "raw") {
+      return `(${f.raw!.build((v) => {
+        params.push(v);
+        return `$${params.length}`;
+      })})`;
+    }
     throw new Error(`Unsupported filter kind: ${f.kind}`);
   }
 
@@ -466,7 +535,9 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any; count: number
     if (value === null || value === "null") return `${left} IS NULL`;
     if (value === true || value === "true") return `${left} IS TRUE`;
     if (value === false || value === "false") return `${left} IS FALSE`;
-    return `${left} IS NOT DISTINCT FROM ${value}`;
+    if (value === "unknown") return `${left} IS UNKNOWN`;
+    // Never splice the value into SQL: `is` only takes null/true/false/unknown.
+    throw new Error(`Unsupported is value: ${String(value)}`);
   }
 
   private cmpClause(col: string, op: string, value: any, params: any[]): string {
@@ -665,7 +736,11 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any; count: number
     return Array.from(cols).join(", ");
   }
 
-  private async resolveEmbeds(rows: Row[], parsed: ParsedSelect): Promise<void> {
+  private async resolveEmbeds(
+    rows: Row[],
+    parsed: ParsedSelect,
+    owner: string = this.table
+  ): Promise<void> {
     if (rows.length === 0 || parsed.embeds.length === 0) return;
     const pool = getPool();
     for (const embed of parsed.embeds) {
@@ -677,10 +752,10 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any; count: number
       if (fk) {
         // fk-column form: prefer the owning table's own FK edge to disambiguate
         // (template_id -> sms_templates vs email_templates depends on the table)
-        const own = (FK_MAP[this.table] || []).find((e) => e.column === fk);
+        const own = (FK_MAP[owner] || []).find((e) => e.column === fk);
         if (own) embedTable = own.foreignTable;
       } else {
-        const fwd = (FK_MAP[this.table] || []).find((e) => e.foreignTable === embed.table);
+        const fwd = (FK_MAP[owner] || []).find((e) => e.foreignTable === embed.table);
         if (fwd) fk = fwd.column;
       }
       if (fk) {
@@ -689,19 +764,22 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any; count: number
           new Set(rows.map((r) => r[fk]).filter((v) => v !== null && v !== undefined))
         );
         const wantId = embedWantsId(embed.select);
-        const innerCols = this.embedColumns(embed.select);
+        const innerCols = this.embedColumns(embed.select, undefined, embedTable);
+        const policy = this.embedPolicy ? this.embedPolicy(embedTable, owner) : null;
         let related: Row[] = [];
-        if (ids.length) {
+        if (ids.length && policy !== "deny") {
+          const params: any[] = [...ids];
           const ph = ids.map((_, i) => `$${i + 1}`).join(",");
+          const extra = policy ? ` AND (${buildRaw(policy, params)})` : "";
           const res = await pool.query(
-            `SELECT ${innerCols} FROM ${ident(embedTable)} WHERE ${ident("id")} IN (${ph})`,
-            ids
+            `SELECT ${innerCols} FROM ${ident(embedTable)} WHERE ${ident("id")} IN (${ph})${extra}`,
+            params
           );
           related = res.rows;
         }
         const byId = new Map(related.map((r) => [r.id, r]));
         // resolve nested embeds
-        await this.resolveEmbeds(related, embed.select);
+        await this.resolveEmbeds(related, embed.select, embedTable);
         // PostgREST only returns requested columns — drop the join-only id
         if (!wantId) for (const r of related) delete r.id;
         for (const r of rows) {
@@ -709,15 +787,39 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any; count: number
         }
       } else {
         // reverse embed (has-many): related.<table>_fk -> current.id (array)
-        const edge = this.findReverseEdge(embedTable);
-        const fkCol = edge?.column ?? `${singularize(this.table)}_id`;
+        const edge = this.findReverseEdge(embedTable, owner);
+        const fkCol = edge?.column ?? `${singularize(owner)}_id`;
         const parentIds = Array.from(new Set(rows.map((r) => r.id).filter(Boolean)));
         const wantId = embedWantsId(embed.select);
         const wantFk = embed.select.star || embed.select.columns.includes(fkCol);
-        const innerCols = this.embedColumns(embed.select, fkCol);
+        const policy = this.embedPolicy ? this.embedPolicy(embedTable, owner) : null;
+        // PostgREST aggregate embed: product_variants(count) -> [{ count: n }]
+        if (
+          !embed.select.star &&
+          embed.select.embeds.length === 0 &&
+          embed.select.columns.length === 1 &&
+          embed.select.columns[0] === "count"
+        ) {
+          const counts = new Map<any, number>();
+          if (parentIds.length && policy !== "deny") {
+            const params: any[] = [...parentIds];
+            const ph = parentIds.map((_, i) => `$${i + 1}`).join(",");
+            const extra = policy ? ` AND (${buildRaw(policy, params)})` : "";
+            const res = await pool.query(
+              `SELECT ${ident(fkCol)} AS k, count(*)::int AS c FROM ${ident(embedTable)} WHERE ${ident(fkCol)} IN (${ph})${extra} GROUP BY 1`,
+              params
+            );
+            for (const r of res.rows) counts.set(r.k, r.c);
+          }
+          for (const r of rows) r[embed.alias] = [{ count: counts.get(r.id) ?? 0 }];
+          continue;
+        }
+        const innerCols = this.embedColumns(embed.select, fkCol, embedTable);
         let related: Row[] = [];
-        if (parentIds.length) {
+        if (parentIds.length && policy !== "deny") {
+          const params: any[] = [...parentIds];
           const ph = parentIds.map((_, i) => `$${i + 1}`).join(",");
+          const extra = policy ? ` AND (${buildRaw(policy, params)})` : "";
           // Gallery tables (product_images) have position. Variant tables do not.
           // Ordering every star-embed by position makes the whole product query fail.
           const wantsPosition =
@@ -727,12 +829,12 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any; count: number
               ? ` ORDER BY ${ident("position")} ASC NULLS LAST`
               : "";
           const res = await pool.query(
-            `SELECT ${innerCols} FROM ${ident(embedTable)} WHERE ${ident(fkCol)} IN (${ph})${orderBy}`,
-            parentIds
+            `SELECT ${innerCols} FROM ${ident(embedTable)} WHERE ${ident(fkCol)} IN (${ph})${extra}${orderBy}`,
+            params
           );
           related = res.rows;
         }
-        await this.resolveEmbeds(related, embed.select);
+        await this.resolveEmbeds(related, embed.select, embedTable);
         const grouped = new Map<any, Row[]>();
         for (const r of related) {
           const k = r[fkCol];
@@ -746,19 +848,25 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any; count: number
     }
   }
 
-  private embedColumns(parsed: ParsedSelect, extraFk?: string): string {
+  private embedColumns(parsed: ParsedSelect, extraFk?: string, table?: string): string {
     if (parsed.star && parsed.columns.length === 0) return "*";
     const cols = new Set<string>();
     if (parsed.star) cols.add("*");
     for (const c of parsed.columns) cols.add(ident(c));
     cols.add(ident("id"));
     if (extraFk) cols.add(ident(extraFk));
-    for (const e of parsed.embeds) if (e.fkColumn) cols.add(ident(e.fkColumn));
+    for (const e of parsed.embeds) {
+      // nested forward embeds need this table's fk column (order_items.product_id)
+      const fk =
+        e.fkColumn ??
+        (table ? (FK_MAP[table] || []).find((x) => x.foreignTable === e.table)?.column : undefined);
+      if (fk) cols.add(ident(fk));
+    }
     return Array.from(cols).join(", ");
   }
 
-  private findReverseEdge(relatedTable: string): FkEdge | undefined {
-    return (FK_MAP[relatedTable] || []).find((e) => e.foreignTable === this.table);
+  private findReverseEdge(relatedTable: string, owner: string = this.table): FkEdge | undefined {
+    return (FK_MAP[relatedTable] || []).find((e) => e.foreignTable === owner);
   }
 
   private async execInsert(pool: ReturnType<typeof getPool>): Promise<Row[]> {
@@ -790,7 +898,7 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any; count: number
         .filter((c) => !(this.onConflictCols || ["id"]).includes(c))
         .map((c) => `${ident(c)} = EXCLUDED.${ident(c)}`);
       sql += ` ON CONFLICT (${conflict}) DO ${
-        updates.length ? `UPDATE SET ${updates.join(", ")}` : "NOTHING"
+        updates.length && !this.ignoreDuplicates ? `UPDATE SET ${updates.join(", ")}` : "NOTHING"
       }`;
     }
     if (this.returnRows) sql += " RETURNING *";
@@ -828,6 +936,13 @@ class QueryBuilder implements PromiseLike<{ data: any; error: any; count: number
   ): PromiseLike<TResult1 | TResult2> {
     return this.exec().then(onfulfilled, onrejected);
   }
+}
+
+function buildRaw(raw: RawFilter, params: any[]): string {
+  return raw.build((v) => {
+    params.push(v);
+    return `$${params.length}`;
+  });
 }
 
 function embedWantsId(parsed: ParsedSelect): boolean {
@@ -1056,6 +1171,17 @@ export function applyPostgrestParams(
     if (dot === -1) continue;
     const op = raw.slice(0, dot);
     const value = raw.slice(dot + 1);
+    if (op === "not") {
+      // supabase-js .not(col, op, val) -> col=not.op.val
+      const innerDot = value.indexOf(".");
+      if (innerDot === -1) throw new Error(`Invalid not filter: ${raw}`);
+      const innerOp = value.slice(0, innerDot);
+      const innerVal = value.slice(innerDot + 1);
+      if (innerOp === "is") qb.not(key, "is", innerVal === "null" ? null : innerVal);
+      else if (innerOp === "in") qb.not(key, "in", innerVal);
+      else qb.not(key, innerOp, coerce(innerVal));
+      continue;
+    }
     if (op === "eq") qb.eq(key, coerce(value));
     else if (op === "neq") qb.neq(key, coerce(value));
     else if (op === "gt") qb.gt(key, coerce(value));

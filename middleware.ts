@@ -8,7 +8,8 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const usePlainPg = process.env.NEXT_PUBLIC_USE_PLAIN_PG === 'true';
 
 function extractToken(request: NextRequest): string | undefined {
-  let token = request.cookies.get('sb-access-token')?.value;
+  // Set by lib/supabase.ts from the browser session.
+  let token = request.cookies.get('mm-access-token')?.value || request.cookies.get('sb-access-token')?.value;
 
   if (!token) {
     const projectRef = supabaseUrl?.split('//')[1]?.split('.')[0];

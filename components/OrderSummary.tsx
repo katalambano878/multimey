@@ -13,9 +13,12 @@ interface OrderSummaryProps {
   shipping: number;
   tax: number;
   total: number;
+  discount?: number;
+  couponCode?: string | null;
+  couponSlot?: React.ReactNode;
 }
 
-export default function OrderSummary({ items, subtotal, shipping, tax, total }: OrderSummaryProps) {
+export default function OrderSummary({ items, subtotal, shipping, tax, total, discount = 0, couponCode, couponSlot }: OrderSummaryProps) {
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 sm:p-8 sticky top-24">
       <h2 className="text-xl font-bold text-gray-900 mb-6">Order Summary</h2>
@@ -53,7 +56,15 @@ export default function OrderSummary({ items, subtotal, shipping, tax, total }: 
             {shipping === 0 ? 'FREE' : `GH₵${shipping.toFixed(2)}`}
           </span>
         </div>
+        {discount > 0 && (
+          <div className="flex justify-between text-[15px] text-green-700">
+            <span>Discount{couponCode ? ` (${couponCode})` : ''}</span>
+            <span className="font-medium">−GH₵{discount.toFixed(2)}</span>
+          </div>
+        )}
       </div>
+
+      {couponSlot && <div className="border-t border-gray-100 mt-5 pt-5">{couponSlot}</div>}
 
       <div className="border-t border-gray-100 mt-5 pt-5">
         <div className="flex justify-between items-center">

@@ -205,6 +205,11 @@ export default function AdminLayout({
       moduleId: 'notifications'
     },
     {
+      title: 'Messages',
+      icon: 'ri-mail-unread-line',
+      path: '/admin/messages'
+    },
+    {
       title: 'Course Registrations',
       icon: 'ri-graduation-cap-line',
       path: '/admin/courses'
@@ -329,10 +334,9 @@ export default function AdminLayout({
             </button>
 
             <div className="flex items-center space-x-2 lg:space-x-4">
-              <button className="relative w-10 h-10 flex items-center justify-center text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer">
+              <Link href="/admin/orders?status=pending" title="Pending orders" className="relative w-10 h-10 flex items-center justify-center text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer">
                 <i className="ri-notification-3-line text-xl"></i>
-                <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
-              </button>
+              </Link>
 
               <div className="relative user-menu-container">
                 <button

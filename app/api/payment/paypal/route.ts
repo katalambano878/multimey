@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { chargeableAmount } from '@/lib/orders';
 import { checkRateLimit, getClientIdentifier, RATE_LIMITS } from '@/lib/rate-limit';
 
 /**
@@ -39,12 +40,18 @@ export async function POST(req: Request) {
       );
     }
 
-    const body = await req.json();
-    const { orderId, amount, customerEmail } = body;
-
-    if (!orderId || amount == null) {
-      return NextResponse.json({ success: false, message: 'Missing orderId or amount' }, { status: 400 });
+    const body = await req.json().catch(() => ({}));
+    const orderId = typeof body?.orderId === 'string' ? body.orderId.trim() : '';
+    // Charge what the server stored for this order, never an amount sent by the browser.
+    const charge = orderId ? await chargeableAmount(orderId) : null;
+    if (!charge) {
+      return NextResponse.json({ success: false, message: 'Order not found' }, { status: 404 });
     }
+    if (charge.paid) {
+      return NextResponse.json({ success: false, message: 'This order is already paid.' }, { status: 400 });
+    }
+    const amount = charge.amount;
+    const customerEmail = charge.email;
 
     const requestUrl = new URL(req.url);
     const baseUrl = (process.env.NEXT_PUBLIC_APP_URL || requestUrl.origin).replace(/\/+$/, '');

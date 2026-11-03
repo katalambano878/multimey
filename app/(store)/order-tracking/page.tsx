@@ -28,34 +28,17 @@ function OrderTrackingContent() {
     setError('');
 
     try {
-      const { data, error: fetchError } = await supabase
-        .from('orders')
-        .select(`
-          *,
-          order_items (
-            id,
-            product_name,
-            variant_name,
-            quantity,
-            unit_price,
-            metadata,
-            products (
-              product_images (url)
-            )
-          )
-        `)
-        .eq('order_number', orderNum)
-        .single();
+      const { data: { session } } = await supabase.auth.getSession();
+      const params = new URLSearchParams({ order: orderNum.trim() });
+      if (email.trim()) params.set('email', email.trim());
+      const res = await fetch(`/api/orders/track?${params}`, {
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+        cache: 'no-store',
+      });
+      const data = await res.json().catch(() => null);
 
-      if (fetchError || !data) {
-        setError('Order not found. Please check your order number and try again.');
-        setIsTracking(false);
-        return;
-      }
-
-      // If email was provided, verify it matches
-      if (email && data.email?.toLowerCase() !== email.toLowerCase()) {
-        setError('The email address does not match this order.');
+      if (!res.ok || !data) {
+        setError(data?.error || 'Order not found. Please check your order number and try again.');
         setIsTracking(false);
         return;
       }

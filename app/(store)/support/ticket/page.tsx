@@ -1,11 +1,16 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import Header from '@/components/Header';
-import Footer from '@/components/Footer';
+import { supabase } from '@/lib/supabase';
 import { useRecaptcha } from '@/hooks/useRecaptcha';
+
+const PRIORITY_MAP: Record<string, 'low' | 'medium' | 'high'> = {
+  low: 'low',
+  normal: 'medium',
+  high: 'high',
+};
 
 export default function SupportTicketPage() {
   const router = useRouter();
@@ -17,11 +22,31 @@ export default function SupportTicketPage() {
     priority: 'normal',
     subject: '',
     description: '',
-    attachments: [] as File[]
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [ticketNumber, setTicketNumber] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState('');
+  const [userId, setUserId] = useState<string | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const { getToken } = useRecaptcha();
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      const user = session?.user;
+      setUserId(user?.id ?? null);
+      if (user) {
+        const meta = user.user_metadata || {};
+        const fullName = meta.full_name || [meta.first_name, meta.last_name].filter(Boolean).join(' ');
+        setFormData((prev) => ({
+          ...prev,
+          name: prev.name || fullName || '',
+          email: prev.email || user.email || '',
+        }));
+      }
+      setAuthChecked(true);
+    });
+  }, []);
 
   const categories = [
     { value: 'order', label: 'Order Issue', icon: 'ri-shopping-bag-line' },
@@ -35,38 +60,49 @@ export default function SupportTicketPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!userId) return;
     setIsSubmitting(true);
+    setSubmitError('');
 
     // reCAPTCHA verification
     const isHuman = await getToken('support_ticket');
     if (!isHuman) {
       setIsSubmitting(false);
-      alert('Security verification failed. Please try again.');
+      setSubmitError('Security verification failed. Please try again.');
       return;
     }
-    
-    setTimeout(() => {
-      setIsSubmitting(false);
-      setShowSuccess(true);
-      setTimeout(() => {
-        router.push('/support/tickets');
-      }, 2000);
-    }, 1500);
-  };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      setFormData({
-        ...formData,
-        attachments: Array.from(e.target.files)
-      });
+    const orderNumber = formData.orderNumber.trim();
+    const { data, error } = await supabase
+      .from('support_tickets')
+      .insert({
+        user_id: userId,
+        email: formData.email.trim(),
+        subject: formData.subject.trim(),
+        description: orderNumber
+          ? `${formData.description.trim()}\n\nOrder number: ${orderNumber}`
+          : formData.description.trim(),
+        category: formData.category,
+        status: 'open',
+        priority: PRIORITY_MAP[formData.priority] || 'medium',
+        metadata: { name: formData.name.trim(), order_number: orderNumber || null },
+      })
+      .select('ticket_number')
+      .single();
+
+    setIsSubmitting(false);
+    if (error) {
+      console.error('Support ticket error:', error);
+      setSubmitError('We could not submit your ticket. Please try again or message us on WhatsApp.');
+      return;
     }
+    setTicketNumber(data?.ticket_number != null ? String(data.ticket_number) : null);
+    setShowSuccess(true);
   };
 
   if (showSuccess) {
     return (
       <>
-        <Header />
         <main className="min-h-screen bg-gray-50 flex items-center justify-center py-12">
           <div className="max-w-md mx-auto px-4 text-center">
             <div className="bg-white rounded-xl shadow-lg p-8">
@@ -77,12 +113,14 @@ export default function SupportTicketPage() {
               <p className="text-gray-600 mb-2">
                 Your support ticket has been submitted successfully.
               </p>
-              <p className="text-sm text-gray-500 mb-6">
-                Ticket #TKT-2024-{Math.floor(Math.random() * 10000)}
-              </p>
+              {ticketNumber && (
+                <p className="text-sm text-gray-500 mb-6">
+                  Ticket #{ticketNumber}
+                </p>
+              )}
               <div className="space-y-3">
                 <p className="text-sm text-gray-600">
-                  We'll respond to your email within 24 hours.
+                  Our team will reply on this ticket. You can check its status under My Tickets.
                 </p>
                 <Link
                   href="/support/tickets"
@@ -100,14 +138,49 @@ export default function SupportTicketPage() {
             </div>
           </div>
         </main>
-        <Footer />
       </>
+    );
+  }
+
+  if (!authChecked) {
+    return (
+      <main className="min-h-screen bg-gray-50 flex items-center justify-center py-12">
+        <i className="ri-loader-4-line text-3xl text-gray-500 animate-spin"></i>
+      </main>
+    );
+  }
+
+  if (!userId) {
+    return (
+      <main className="min-h-screen bg-gray-50 flex items-center justify-center py-12">
+        <div className="max-w-md mx-auto px-4 text-center">
+          <div className="bg-white rounded-xl shadow-sm p-8">
+            <div className="w-16 h-16 flex items-center justify-center bg-gray-100 rounded-full mx-auto mb-6">
+              <i className="ri-lock-line text-3xl text-gray-900"></i>
+            </div>
+            <h1 className="text-2xl font-bold text-gray-900 mb-3">Sign in to create a ticket</h1>
+            <p className="text-gray-600 mb-6">
+              Support tickets are linked to your account so you can follow up on them. You can also reach us on the Contact page.
+            </p>
+            <div className="space-y-3">
+              <Link
+                href="/auth/login?redirect=/support/ticket"
+                className="block bg-gray-900 hover:bg-gray-800 text-white py-3 rounded-lg font-semibold transition-colors whitespace-nowrap"
+              >
+                Sign In
+              </Link>
+              <Link href="/contact" className="block text-gray-900 font-semibold whitespace-nowrap">
+                Contact Us
+              </Link>
+            </div>
+          </div>
+        </div>
+      </main>
     );
   }
 
   return (
     <>
-      <Header />
       <main className="min-h-screen bg-gray-50 py-12">
         <div className="max-w-4xl mx-auto px-4">
           <Link
@@ -122,7 +195,7 @@ export default function SupportTicketPage() {
             <div className="mb-8">
               <h1 className="text-3xl font-bold text-gray-900 mb-2">Create Support Ticket</h1>
               <p className="text-gray-600">
-                Fill out the form below and our team will get back to you within 24 hours
+                Fill out the form below and our team will get back to you
               </p>
             </div>
 
@@ -281,43 +354,11 @@ export default function SupportTicketPage() {
                 </p>
               </div>
 
-              <div>
-                <label className="block text-sm font-semibold text-gray-900 mb-2">
-                  Attachments (optional)
-                </label>
-                <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
-                  <input
-                    type="file"
-                    onChange={handleFileChange}
-                    multiple
-                    accept="image/*,.pdf"
-                    className="hidden"
-                    id="file-upload"
-                  />
-                  <label
-                    htmlFor="file-upload"
-                    className="cursor-pointer"
-                  >
-                    <i className="ri-upload-cloud-line text-4xl text-gray-400 mb-2"></i>
-                    <p className="text-gray-900 font-semibold mb-1">
-                      Click to upload files
-                    </p>
-                    <p className="text-sm text-gray-500">
-                      PNG, JPG, PDF up to 10MB
-                    </p>
-                  </label>
-                  {formData.attachments.length > 0 && (
-                    <div className="mt-4 space-y-2">
-                      {formData.attachments.map((file, index) => (
-                        <div key={index} className="flex items-center justify-center space-x-2 text-sm text-gray-600">
-                          <i className="ri-file-line"></i>
-                          <span>{file.name}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+              {submitError && (
+                <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg text-sm">
+                  {submitError}
                 </div>
-              </div>
+              )}
 
               <div className="flex space-x-4 pt-6">
                 <button
@@ -354,14 +395,12 @@ export default function SupportTicketPage() {
                   <li>• Check our <Link href="/help" className="underline hover:text-blue-900">Help Center</Link> for quick answers</li>
                   <li>• Average response time: 24 hours</li>
                   <li>• Include your order number for faster assistance</li>
-                  <li>• Attach photos if reporting a product issue</li>
                 </ul>
               </div>
             </div>
           </div>
         </div>
       </main>
-      <Footer />
     </>
   );
 }

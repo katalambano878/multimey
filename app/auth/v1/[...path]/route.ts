@@ -9,6 +9,13 @@ import {
   updateUserMetadata,
 } from "@/lib/db/auth";
 import { isPlainPostgres } from "@/lib/db/mode";
+import { checkRateLimit, getClientIdentifier } from "@/lib/rate-limit";
+
+const AUTH_LIMIT = { maxRequests: 10, windowSeconds: 300 };
+
+function tooMany() {
+  return gotrueError("Too many attempts. Please wait a few minutes and try again.", 429, "over_request_rate_limit");
+}
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -109,6 +116,13 @@ export async function POST(
 
     if (grant === "password") {
       const email = String(body.email || "");
+      const ip = getClientIdentifier(req);
+      if (
+        !checkRateLimit(`login:${ip}`, AUTH_LIMIT).success ||
+        !checkRateLimit(`login:${email.trim().toLowerCase()}`, AUTH_LIMIT).success
+      ) {
+        return tooMany();
+      }
       const password = String(body.password || "");
       const { session, error } = await signInWithPassword(email, password);
       if (error || !session) {
@@ -130,6 +144,9 @@ export async function POST(
   }
 
   if (slug === "signup") {
+    if (!checkRateLimit(`signup:${getClientIdentifier(req)}`, AUTH_LIMIT).success) {
+      return tooMany();
+    }
     const { session, error } = await signUpWithPassword({
       email: String(body.email || ""),
       password: String(body.password || ""),

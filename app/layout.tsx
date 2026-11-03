@@ -107,7 +107,7 @@ export default function RootLayout({
                 "contactType": "customer service",
                 "availableLanguage": "English"
               }
-            })
+            }).replace(/</g, '\\u003c')
           }}
         />
       </head>

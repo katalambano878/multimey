@@ -1,5 +1,6 @@
 import { Resend } from 'resend';
-import { supabase } from '@/lib/supabase';
+import { supabaseAdmin as supabase } from '@/lib/supabase-admin';
+import { escapeHtml } from '@/lib/sanitize';
 
 const resend = new Resend(process.env.RESEND_API_KEY || 'missing_api_key');
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@example.com';
@@ -281,7 +282,7 @@ export async function sendOrderConfirmation(order: any) {
 <div style="text-align:center;margin-bottom:24px;">
   <div style="width:64px;height:64px;background-color:${BRAND.colorLight};border-radius:50%;margin:0 auto 16px;line-height:64px;font-size:28px;">&#10003;</div>
   <h2 style="margin:0 0 4px;color:#111827;font-size:24px;">Order Confirmed!</h2>
-  <p style="margin:0;color:#6b7280;font-size:15px;">Thank you for your purchase, ${name}.</p>
+  <p style="margin:0;color:#6b7280;font-size:15px;">Thank you for your purchase, ${escapeHtml(name)}.</p>
 </div>
 
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f9fafb;border-radius:12px;overflow:hidden;margin:20px 0;">
@@ -312,7 +313,7 @@ ${emailButton('Track Your Order', trackingUrl)}
 
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f9fafb;border-radius:12px;overflow:hidden;margin:16px 0;">
   ${emailInfoRow('Order', `#${order_number || id}`)}
-  ${emailInfoRow('Customer', `${name}`)}
+  ${emailInfoRow('Customer', escapeHtml(name))}
   ${emailInfoRow('Email', email)}
   ${emailInfoRow('Total', `GH₵${Number(total).toFixed(2)}`)}
   ${trackingNumber ? emailInfoRow('Tracking', trackingNumber) : ''}
@@ -405,7 +406,7 @@ export async function sendOrderStatusUpdate(order: any, newStatus: string) {
 <div style="text-align:center;margin-bottom:24px;">
   <div style="width:64px;height:64px;background-color:${sc.bg};border-radius:50%;margin:0 auto 16px;line-height:64px;font-size:28px;">${sc.icon}</div>
   <h2 style="margin:0 0 4px;color:#111827;font-size:22px;">Order Update</h2>
-  <p style="margin:0;color:#6b7280;font-size:14px;">Hi ${name}, here's an update on your order.</p>
+  <p style="margin:0;color:#6b7280;font-size:14px;">Hi ${escapeHtml(name)}, here's an update on your order.</p>
 </div>
 
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f9fafb;border-radius:12px;overflow:hidden;margin:20px 0;">
@@ -439,7 +440,7 @@ export async function sendWelcomeMessage(user: { email: string, firstName: strin
         html: emailLayout(`
 <div style="text-align:center;margin-bottom:24px;">
   <div style="width:64px;height:64px;background-color:${BRAND.colorLight};border-radius:50%;margin:0 auto 16px;line-height:64px;font-size:28px;">&#128075;</div>
-  <h2 style="margin:0 0 4px;color:#111827;font-size:24px;">Welcome, ${firstName}!</h2>
+  <h2 style="margin:0 0 4px;color:#111827;font-size:24px;">Welcome, ${escapeHtml(firstName)}!</h2>
   <p style="margin:0;color:#6b7280;font-size:15px;">We're so glad you're here.</p>
 </div>
 
@@ -514,7 +515,7 @@ export async function sendPaymentLink(order: any) {
 <div style="text-align:center;margin-bottom:24px;">
   <div style="width:64px;height:64px;background-color:#fef3c7;border-radius:50%;margin:0 auto 16px;line-height:64px;font-size:28px;">&#128179;</div>
   <h2 style="margin:0 0 4px;color:#111827;font-size:22px;">Complete Your Order</h2>
-  <p style="margin:0;color:#6b7280;font-size:14px;">Hi ${name}, your order is waiting for payment.</p>
+  <p style="margin:0;color:#6b7280;font-size:14px;">Hi ${escapeHtml(name)}, your order is waiting for payment.</p>
 </div>
 
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f9fafb;border-radius:12px;overflow:hidden;margin:20px 0;">
@@ -542,12 +543,16 @@ ${emailButton('Pay Now — GH₵' + Number(total).toFixed(2), paymentUrl, '#d977
 }
 
 export async function sendContactMessage(data: { name: string, email: string, subject: string, message: string }) {
-    const { name, email, subject, message } = data;
+    // Everything below lands in HTML email bodies, so escape the visitor's text.
+    const name = escapeHtml(data.name);
+    const email = escapeHtml(data.email);
+    const subject = escapeHtml(data.subject);
+    const message = escapeHtml(data.message).replace(/\n/g, '<br>');
 
     // 1. Acknowledge to User
     await sendEmail({
-        to: email,
-        subject: `We received your message: ${subject}`,
+        to: data.email,
+        subject: `We received your message: ${data.subject}`,
         html: emailLayout(`
 <div style="text-align:center;margin-bottom:24px;">
   <div style="width:64px;height:64px;background-color:${BRAND.colorLight};border-radius:50%;margin:0 auto 16px;line-height:64px;font-size:28px;">&#128172;</div>
@@ -570,7 +575,7 @@ export async function sendContactMessage(data: { name: string, email: string, su
     // 2. Alert Admin
     await sendEmail({
         to: ADMIN_EMAIL,
-        subject: `Contact: ${subject}`,
+        subject: `Contact: ${data.subject}`,
         html: emailLayout(`
 <h2 style="margin:0 0 16px;color:#111827;font-size:20px;">&#128233; New Contact Message</h2>
 
@@ -585,7 +590,7 @@ export async function sendContactMessage(data: { name: string, email: string, su
   <p style="color:#374151;font-size:14px;margin:0;line-height:1.6;">${message}</p>
 </div>
 
-${emailButton('Reply to ' + name, `mailto:${email}?subject=Re: ${encodeURIComponent(subject)}`)}
+${emailButton('Reply to ' + name, `mailto:${encodeURIComponent(data.email)}?subject=${encodeURIComponent('Re: ' + data.subject)}`)}
 `, `New contact from ${name}: ${subject}`)
     });
 }

@@ -82,17 +82,6 @@ export default function OrderHistory() {
     }
   };
 
-  const handleReorder = (order: Order) => {
-    // Implement reorder logic (add items back to cart)
-    console.log('Reordering:', order);
-    alert('Reorder feature coming soon!');
-  };
-
-  const handleDownloadInvoice = (orderId: string) => {
-    console.log('Downloading invoice for order:', orderId);
-    alert('Invoice download coming soon!');
-  };
-
   if (loading) {
     return (
       <div className="py-8 text-center">
@@ -187,20 +176,6 @@ export default function OrderHistory() {
                   <i className="ri-map-pin-line mr-2"></i>
                   Track Order
                 </Link>
-                <button
-                  onClick={() => handleReorder(order)}
-                  className="px-4 py-2 border-2 border-gray-300 text-gray-900 rounded-lg font-semibold hover:bg-gray-50 transition-colors whitespace-nowrap"
-                >
-                  <i className="ri-refresh-line mr-2"></i>
-                  Reorder
-                </button>
-                <button
-                  onClick={() => handleDownloadInvoice(order.id)}
-                  className="px-4 py-2 border-2 border-gray-300 text-gray-900 rounded-lg font-semibold hover:bg-gray-50 transition-colors whitespace-nowrap"
-                >
-                  <i className="ri-download-line mr-2"></i>
-                  Invoice
-                </button>
                 <Link
                   href="/contact"
                   className="px-4 py-2 border-2 border-gray-300 text-gray-900 rounded-lg font-semibold hover:bg-gray-50 transition-colors whitespace-nowrap"

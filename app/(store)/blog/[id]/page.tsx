@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { notFound } from 'next/navigation';
 import { sanitizeHtml } from '@/lib/sanitize';
 
 export async function generateStaticParams() {
@@ -259,7 +260,8 @@ export default async function BlogPostPage({ params }: { params: Promise<{ id: s
     }
   };
 
-  const post = posts[id] || posts['1'];
+  const post = Object.prototype.hasOwnProperty.call(posts, id) ? posts[id] : null;
+  if (!post) notFound();
 
   const relatedPosts = [
     {

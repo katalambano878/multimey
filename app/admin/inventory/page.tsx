@@ -7,8 +7,6 @@ import { supabase } from '@/lib/supabase';
 export default function InventoryManagementPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [stockFilter, setStockFilter] = useState('all');
-  const [showImportModal, setShowImportModal] = useState(false);
-  const [showExportModal, setShowExportModal] = useState(false);
   const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
   const [products, setProducts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -41,8 +39,8 @@ export default function InventoryManagementPage() {
           if (stock === 0) status = 'out';
           else if (stock < 10) status = 'low';
 
-          // categories is an array from the join
-          const categoryData = p.categories as { name: string }[] | null;
+          // The join returns one category object (older rows may come back as an array)
+          const categoryData = (Array.isArray(p.categories) ? p.categories : p.categories ? [p.categories] : null) as { name: string }[] | null;
           return {
             id: p.id,
             name: p.name,
@@ -94,10 +92,28 @@ export default function InventoryManagementPage() {
     }
   };
 
-  const handleBulkRestock = () => {
-    // Placeholder for bulk restock logic
-    alert("Bulk restock feature coming soon (requires backend logic).");
+  // Adds the same number of units to each selected product's stock.
+  const handleBulkRestock = async () => {
+    const input = prompt(`How many units should be added to each of the ${selectedProducts.length} selected products?`, '10');
+    if (input === null) return;
+    const amount = parseInt(input, 10);
+    if (!Number.isInteger(amount) || amount <= 0) {
+      alert('Enter a whole number greater than 0.');
+      return;
+    }
+    const failed: string[] = [];
+    for (const id of selectedProducts) {
+      const product = products.find(p => p.id === id);
+      if (!product) continue;
+      const { error } = await supabase
+        .from('products')
+        .update({ quantity: product.currentStock + amount })
+        .eq('id', id);
+      if (error) failed.push(product.name);
+    }
     setSelectedProducts([]);
+    await fetchInventory();
+    alert(failed.length ? `Could not restock: ${failed.join(', ')}` : `Added ${amount} units to each selected product.`);
   };
 
   const handleExportCSV = () => {
@@ -113,14 +129,15 @@ export default function InventoryManagementPage() {
       ])
     ];
 
-    const csvContent = csvData.map(row => row.join(',')).join('\n');
+    const cell = (v: string) => `"${(/^[=+\-@]/.test(v) ? `'${v}` : v).replace(/"/g, '""')}"`;
+    const csvContent = csvData.map(row => row.map(v => cell(String(v ?? ''))).join(',')).join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `inventory-export-${new Date().toISOString().split('T')[0]}.csv`;
     a.click();
-    setShowExportModal(false);
+    window.URL.revokeObjectURL(url);
   };
 
   return (
@@ -224,15 +241,7 @@ export default function InventoryManagementPage() {
               </div>
 
               <button
-                onClick={() => setShowImportModal(true)}
-                className="bg-gray-900 hover:bg-gray-800 text-white px-4 py-3 rounded-lg font-semibold transition-colors flex items-center space-x-2 whitespace-nowrap cursor-pointer"
-              >
-                <i className="ri-upload-line"></i>
-                <span>Import CSV</span>
-              </button>
-
-              <button
-                onClick={() => setShowExportModal(true)}
+                onClick={handleExportCSV}
                 className="border-2 border-gray-300 hover:border-gray-400 text-gray-700 px-4 py-3 rounded-lg font-semibold transition-colors flex items-center space-x-2 whitespace-nowrap cursor-pointer"
               >
                 <i className="ri-download-line"></i>
@@ -340,18 +349,22 @@ export default function InventoryManagementPage() {
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center space-x-2">
-                          <button
+                          <Link
+                            href={`/admin/products/${product.id}`}
                             className="w-8 h-8 flex items-center justify-center text-gray-600 hover:text-gray-900 transition-colors cursor-pointer"
                             title="Edit"
                           >
                             <i className="ri-edit-line text-lg"></i>
-                          </button>
-                          <button
+                          </Link>
+                          <a
+                            href={`/product/${product.id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
                             className="w-8 h-8 flex items-center justify-center text-gray-600 hover:text-blue-700 transition-colors cursor-pointer"
-                            title="View Details"
+                            title="View in shop"
                           >
                             <i className="ri-eye-line text-lg"></i>
-                          </button>
+                          </a>
                         </div>
                       </td>
                     </tr>
@@ -362,8 +375,6 @@ export default function InventoryManagementPage() {
           </div>
         </div>
       </div>
-      {showImportModal && <div className="hidden">Mock Modal</div>}
-      {showExportModal && <div className="hidden">Mock Export</div>}
     </div>
   );
 }

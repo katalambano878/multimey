@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/db/supabase-compat";
 import { isPlainPostgres } from "@/lib/db/mode";
+import { resolveCaller, rpcAllowed } from "@/lib/db/access";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -30,7 +31,16 @@ export async function POST(
     return NextResponse.json({ message: "Invalid function name" }, { status: 400 });
   }
 
-  const args = (await req.json().catch(() => ({}))) as Record<string, any>;
+  const caller = await resolveCaller(req);
+  if (!rpcAllowed(caller, fn)) {
+    return NextResponse.json(
+      { message: "You don't have permission to call this function.", code: "42501" },
+      { status: 403 }
+    );
+  }
+
+  const parsed = await req.json().catch(() => ({}));
+  const args = (parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}) as Record<string, any>;
   const client = createClient();
   const { data, error } = await client.rpc(fn, args);
   if (error) {

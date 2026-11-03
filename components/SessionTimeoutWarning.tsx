@@ -1,37 +1,63 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { supabase } from '@/lib/supabase';
+
+const IDLE_TIMEOUT = 25 * 60 * 1000;
+const WARNING_TIME = 60 * 1000;
 
 export default function SessionTimeoutWarning() {
   const [showWarning, setShowWarning] = useState(false);
   const [countdown, setCountdown] = useState(60);
-  const [lastActivity, setLastActivity] = useState(Date.now());
+  const [signedIn, setSignedIn] = useState(false);
+  const lastActivityRef = useRef(Date.now());
+  const loggingOutRef = useRef(false);
 
-  const IDLE_TIMEOUT = 25 * 60 * 1000;
-  const WARNING_TIME = 60 * 1000;
+  // Only track idle time while a customer is actually signed in.
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSignedIn(!!data.session));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSignedIn(!!session);
+      if (!session) setShowWarning(false);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    if (loggingOutRef.current) return;
+    loggingOutRef.current = true;
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      // Still redirect even if sign-out fails
+    }
+    try { localStorage.setItem('session_expired', 'true'); } catch { /* ignore */ }
+    window.location.href = '/auth/login';
+  }, []);
 
   useEffect(() => {
+    if (!signedIn) return;
+    lastActivityRef.current = Date.now();
     const activityEvents = ['mousedown', 'keydown', 'scroll', 'touchstart'];
 
     const resetTimer = () => {
-      setLastActivity(Date.now());
+      lastActivityRef.current = Date.now();
       setShowWarning(false);
       setCountdown(60);
     };
 
     activityEvents.forEach(event => {
-      window.addEventListener(event, resetTimer);
+      window.addEventListener(event, resetTimer, { passive: true });
     });
 
     const checkInterval = setInterval(() => {
-      const timeSinceActivity = Date.now() - lastActivity;
-      
+      const timeSinceActivity = Date.now() - lastActivityRef.current;
+
       if (timeSinceActivity >= IDLE_TIMEOUT) {
         handleLogout();
       } else if (timeSinceActivity >= IDLE_TIMEOUT - WARNING_TIME) {
         setShowWarning(true);
-        const remaining = Math.ceil((IDLE_TIMEOUT - timeSinceActivity) / 1000);
-        setCountdown(remaining);
+        setCountdown(Math.ceil((IDLE_TIMEOUT - timeSinceActivity) / 1000));
       }
     }, 1000);
 
@@ -41,20 +67,15 @@ export default function SessionTimeoutWarning() {
       });
       clearInterval(checkInterval);
     };
-  }, [lastActivity, IDLE_TIMEOUT, WARNING_TIME]);
-
-  const handleLogout = () => {
-    localStorage.setItem('session_expired', 'true');
-    window.location.href = '/auth/login';
-  };
+  }, [signedIn, handleLogout]);
 
   const handleStayLoggedIn = () => {
-    setLastActivity(Date.now());
+    lastActivityRef.current = Date.now();
     setShowWarning(false);
     setCountdown(60);
   };
 
-  if (!showWarning) return null;
+  if (!signedIn || !showWarning) return null;
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">

@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import FraudDetectionAlert from '@/components/FraudDetectionAlert';
@@ -130,7 +130,12 @@ export default function OrderDetailClient({ orderId }: OrderDetailClientProps) {
     }
   };
 
+  const savingRef = useRef(false);
+
   const handleUpdateStatus = async (newStatus?: string) => {
+    // Ignore repeat clicks while a save is running, so customers get one notification.
+    if (savingRef.current) return;
+    savingRef.current = true;
     try {
       setStatusUpdating(true);
       const statusToUpdate = newStatus || order.status;
@@ -149,12 +154,24 @@ export default function OrderDetailClient({ orderId }: OrderDetailClientProps) {
 
       if (error) throw error;
 
+      // Cancelling or refunding a paid order puts its items back in stock (once).
+      let metadata = { ...order.metadata, tracking_number: trackingNumber };
+      if ((statusToUpdate === 'cancelled' || statusToUpdate === 'refunded') && order.metadata?.stock_reduced) {
+        const { data: restocked, error: restockError } = await supabase.rpc('restock_order', { p_order_id: order.id });
+        if (restockError) {
+          alert('Status saved, but stock could not be put back: ' + restockError.message);
+        } else if (restocked) {
+          const { stock_reduced: _done, ...rest } = metadata;
+          metadata = rest;
+        }
+      }
+
       // Update local state
       setOrder({
         ...order,
         status: statusToUpdate,
         notes: adminNotes,
-        metadata: { ...order.metadata, tracking_number: trackingNumber }
+        metadata
       });
 
       // Send Notification (Email + SMS)
@@ -194,6 +211,7 @@ export default function OrderDetailClient({ orderId }: OrderDetailClientProps) {
       console.error('Error updating order:', err);
       alert('Failed to update order');
     } finally {
+      savingRef.current = false;
       setStatusUpdating(false);
     }
   };

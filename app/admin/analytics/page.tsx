@@ -29,6 +29,25 @@ export default function AnalyticsPage() {
     fetchAnalytics();
   }, [timeRange]);
 
+  const exportReport = () => {
+    const cell = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const keys = salesData.length ? Object.keys(salesData[0]) : [];
+    const lines = [
+      keys.map(cell).join(','),
+      ...salesData.map(row => keys.map(k => cell(row[k])).join(',')),
+      '',
+      ['Product', 'Units', 'Revenue'].map(cell).join(','),
+      ...topProducts.map((p: any) => [p.name, p.units ?? '', Number(p.revenue || 0).toFixed(2)].map(cell).join(',')),
+    ];
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `sales-${timeRange}-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
   const fetchAnalytics = async () => {
     try {
       setLoading(true);
@@ -43,52 +62,25 @@ export default function AnalyticsPage() {
 
       const isoStart = startDate.toISOString();
 
-      // Fetch Orders for Revenue & Count - only PAID orders count as revenue
+      // Paid, non-cancelled orders in range, with their items in the same request
+      // (a separate `.in(order_id, …)` call overflows the URL on long ranges).
       const { data: orders, error: orderError } = await supabase
         .from('orders')
-        .select('id, created_at, total, payment_status')
+        .select(`
+            id, created_at, total, payment_status, status,
+            order_items (quantity, unit_price, total_price, product_id, products (name, category_id, categories (name)))
+         `)
         .gte('created_at', isoStart)
-        .eq('payment_status', 'paid') // Only count paid orders as revenue
-        .neq('status', 'cancelled')
+        .eq('payment_status', 'paid')
+        .not('status', 'in', '(cancelled,refunded)')
         .order('created_at');
 
       if (orderError) throw orderError;
 
-      // Fetch Order Items for Products & Categories
-      // This might be heavy for large DBs, but fine for typical small shop admin
-      const { data: items, error: itemError } = await supabase
-        .from('order_items')
-        .select(`
-            *,
-            products (name, categories(name))
-         `)
-        .gte('created_at', isoStart); // Assuming order_items has created_at or join orders.. 
-      // Actually order_items usually doesn't have created_at directly in some schemas, 
-      // so we should join orders to filter by date.
-      // Simpler: fetch order_items for the fetched orders IDs.
-
-      let validItems: any[] = [];
-      if (orders && orders.length > 0) {
-        const orderIds = orders.map(o => o.id);
-        const { data: fetchedItems, error: itemFetchError } = await supabase
-          .from('order_items')
-          .select(`
-            quantity, 
-            unit_price, 
-            total_price,
-            product_id,
-            products!inner(name, category_id, categories(name))
-          `)
-          .in('order_id', orderIds);
-
-        if (itemFetchError) {
-          console.error('Error fetching order items:', itemFetchError);
-        }
-        if (fetchedItems) validItems = fetchedItems;
-      }
+      const validItems: any[] = (orders || []).flatMap((o: any) => o.order_items || []).filter((i: any) => i.products);
 
       // Process Metrics
-      const totalRevenue = orders?.reduce((sum, o) => sum + (o.total || 0), 0) || 0;
+      const totalRevenue = orders?.reduce((sum: number, o: any) => sum + (Number(o.total) || 0), 0) || 0;
       const totalOrders = orders?.length || 0;
       const aov = totalOrders > 0 ? totalRevenue / totalOrders : 0;
 
@@ -183,7 +175,7 @@ export default function AnalyticsPage() {
               <option value="90days">Last 90 Days</option>
               <option value="year">This Year</option>
             </select>
-            <button className="bg-gray-900 hover:bg-gray-800 text-white px-6 py-3 rounded-lg font-semibold transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center">
+            <button onClick={exportReport} className="bg-gray-900 hover:bg-gray-800 text-white px-6 py-3 rounded-lg font-semibold transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center">
               <i className="ri-download-line mr-2"></i>
               Export
             </button>

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import MiniCart from './MiniCart';
 import { useCart } from '@/context/CartContext';
+import { useWishlist } from '@/context/WishlistContext';
 import { supabase } from '@/lib/supabase';
 import { useCMS } from '@/context/CMSContext';
 import AnnouncementBar from './AnnouncementBar';
@@ -76,12 +77,12 @@ export default function Header() {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
-  const [wishlistCount, setWishlistCount] = useState(0);
   const [user, setUser] = useState<any>(null);
   const [expandedMobileSection, setExpandedMobileSection] = useState<string | null>(null);
   const [mobileNavItems, setMobileNavItems] = useState<MobileNavItem[]>(() => buildMobileNavFromCategories([]));
 
   const { cartCount, isCartOpen, setIsCartOpen } = useCart();
+  const { wishlistCount } = useWishlist();
   const { getSetting, getSettingJSON } = useCMS();
 
   const siteName = getSetting('site_name') || 'MultiMey Supplies';
@@ -100,13 +101,6 @@ export default function Header() {
   ]);
 
   useEffect(() => {
-    const updateWishlistCount = () => {
-      const wishlist = JSON.parse(localStorage.getItem('wishlist') || '[]');
-      setWishlistCount(wishlist.length);
-    };
-    updateWishlistCount();
-    window.addEventListener('wishlistUpdated', updateWishlistCount);
-
     const checkUser = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       setUser(session?.user ?? null);
@@ -116,7 +110,6 @@ export default function Header() {
       setUser(session?.user ?? null);
     });
     return () => {
-      window.removeEventListener('wishlistUpdated', updateWishlistCount);
       subscription.unsubscribe();
     };
   }, []);

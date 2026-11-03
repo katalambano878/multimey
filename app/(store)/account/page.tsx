@@ -50,12 +50,21 @@ function AccountContent() {
         return;
       }
 
+      const meta = session.user.user_metadata || {};
+      // The profile row is the fallback for name/phone not kept in auth metadata
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('full_name, phone')
+        .eq('id', session.user.id)
+        .maybeSingle();
+      const [profileFirst = '', ...profileRest] = (profile?.full_name || '').trim().split(/\s+/);
+
       setUser(session.user);
       setProfileData({
-        firstName: session.user.user_metadata?.first_name || '',
-        lastName: session.user.user_metadata?.last_name || '',
+        firstName: meta.first_name || profileFirst || '',
+        lastName: meta.last_name || profileRest.join(' ') || '',
         email: session.user.email || '',
-        phone: session.user.phone || ''
+        phone: meta.phone || profile?.phone || session.user.phone || ''
       });
       setLoading(false);
     }
@@ -77,6 +86,16 @@ function AccountContent() {
       });
 
       if (error) throw error;
+
+      // Keep the profile row (used by admin and orders) in sync
+      if (user?.id) {
+        const fullName = [profileData.firstName, profileData.lastName].map(v => v.trim()).filter(Boolean).join(' ');
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .update({ full_name: fullName || null, phone: profileData.phone.trim() || null })
+          .eq('id', user.id);
+        if (profileError) console.error('Profile row update failed:', profileError);
+      }
       setProfileMessage({ type: 'success', text: 'Profile updated successfully!' });
     } catch (err: any) {
       setProfileMessage({ type: 'error', text: err.message });
@@ -127,35 +146,23 @@ function AccountContent() {
     );
   }
 
-  const quickActions = [
+  const securityOptions: { icon: string; title: string; description: string; verified?: boolean; link?: string }[] = [
     {
-      icon: 'ri-medal-line',
-      title: 'Loyalty Program',
-      description: 'Earn points and rewards',
-      link: '/loyalty'
-    },
-    {
-      icon: 'ri-user-add-line',
-      title: 'Refer & Earn',
-      description: 'Invite friends and earn rewards',
-      link: '/referral'
-    }
-  ];
-
-  const securityOptions = [
-    {
-      icon: 'ri-mail-check-line',
-      title: 'Verify Email',
-      description: user?.email,
-      status: user?.email_confirmed_at ? 'verified' : 'unverified',
-      link: '#' // /account/verify-email
+      icon: 'ri-mail-line',
+      title: 'Email',
+      description: user?.email || '',
+      verified: !!user?.email_confirmed_at,
     },
     {
       icon: 'ri-phone-line',
-      title: 'Verify Phone',
-      description: user?.phone || 'No phone added',
-      status: user?.phone_confirmed_at ? 'verified' : 'unverified',
-      link: '#' // /account/verify-phone
+      title: 'Phone',
+      description: profileData.phone || 'No phone added',
+    },
+    {
+      icon: 'ri-shield-user-line',
+      title: 'Privacy & Data',
+      description: 'Download your data or ask us to delete your account',
+      link: '/account/privacy',
     }
   ];
 
@@ -369,36 +376,47 @@ function AccountContent() {
                   <div>
                     <h2 className="text-2xl font-bold text-gray-900 mb-6">Security Settings</h2>
                     <div className="grid md:grid-cols-2 gap-4">
-                      {securityOptions.map((option, index) => (
-                        <Link
-                          key={index}
-                          href={option.link}
-                          className="flex items-center justify-between p-5 border border-gray-200 rounded-2xl hover:border-gray-600 hover:shadow-md transition-all group bg-white"
-                        >
-                          <div className="flex items-center gap-4">
-                            <div className="w-12 h-12 bg-gray-50 rounded-full flex items-center justify-center group-hover:bg-gray-100 group-hover:text-gray-900 transition-colors">
-                              <i className={`${option.icon} text-xl`}></i>
+                      {securityOptions.map((option, index) => {
+                        const inner = (
+                          <>
+                            <div className="flex items-center gap-4 min-w-0">
+                              <div className="w-12 h-12 flex-shrink-0 bg-gray-50 rounded-full flex items-center justify-center group-hover:bg-gray-100 group-hover:text-gray-900 transition-colors">
+                                <i className={`${option.icon} text-xl`}></i>
+                              </div>
+                              <div className="min-w-0">
+                                <h3 className="font-bold text-gray-900">{option.title}</h3>
+                                <p className="text-sm text-gray-500 truncate">{option.description}</p>
+                              </div>
                             </div>
-                            <div>
-                              <h3 className="font-bold text-gray-900">{option.title}</h3>
-                              <p className="text-sm text-gray-500">{option.description}</p>
+                            <div className="flex items-center gap-3">
+                              {option.verified && (
+                                <span className="text-xs font-bold px-3 py-1 bg-gray-100 text-gray-900 rounded-full flex items-center gap-1">
+                                  <i className="ri-verified-badge-fill"></i> Verified
+                                </span>
+                              )}
+                              {option.link && (
+                                <i className="ri-arrow-right-line text-gray-300 group-hover:text-gray-600 transition-colors"></i>
+                              )}
                             </div>
+                          </>
+                        );
+                        return option.link ? (
+                          <Link
+                            key={index}
+                            href={option.link}
+                            className="flex items-center justify-between p-5 border border-gray-200 rounded-2xl hover:border-gray-600 hover:shadow-md transition-all group bg-white"
+                          >
+                            {inner}
+                          </Link>
+                        ) : (
+                          <div
+                            key={index}
+                            className="flex items-center justify-between p-5 border border-gray-200 rounded-2xl bg-white"
+                          >
+                            {inner}
                           </div>
-                          <div className="flex items-center gap-3">
-                            {option.status === 'verified' && (
-                              <span className="text-xs font-bold px-3 py-1 bg-gray-100 text-gray-900 rounded-full flex items-center gap-1">
-                                <i className="ri-verified-badge-fill"></i> Verified
-                              </span>
-                            )}
-                            {option.status === 'unverified' && (
-                              <span className="text-xs font-bold px-3 py-1 bg-amber-100 text-amber-700 rounded-full flex items-center gap-1">
-                                <i className="ri-error-warning-fill"></i> Verify
-                              </span>
-                            )}
-                            <i className="ri-arrow-right-line text-gray-300 group-hover:text-gray-600 transition-colors"></i>
-                          </div>
-                        </Link>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 )}

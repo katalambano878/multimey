@@ -17,9 +17,12 @@ export default function RecentlyViewed() {
   const [recentProducts, setRecentProducts] = useState<Product[]>([]);
 
   useEffect(() => {
-    const stored = localStorage.getItem('recentlyViewed');
-    if (stored) {
-      setRecentProducts(JSON.parse(stored));
+    try {
+      const stored = localStorage.getItem('recentlyViewed');
+      const parsed = stored ? JSON.parse(stored) : [];
+      if (Array.isArray(parsed)) setRecentProducts(parsed);
+    } catch {
+      /* ignore corrupt storage */
     }
   }, []);
 
@@ -82,12 +85,17 @@ export default function RecentlyViewed() {
 export function addToRecentlyViewed(product: Product) {
   if (typeof window === 'undefined') return;
 
-  const stored = localStorage.getItem('recentlyViewed');
-  let recent: Product[] = stored ? JSON.parse(stored) : [];
+  try {
+    const stored = localStorage.getItem('recentlyViewed');
+    const parsed = stored ? JSON.parse(stored) : [];
+    let recent: Product[] = Array.isArray(parsed) ? parsed : [];
 
-  recent = recent.filter((p) => p.id !== product.id);
-  recent.unshift(product);
-  recent = recent.slice(0, 10);
+    recent = recent.filter((p) => p.id !== product.id);
+    recent.unshift(product);
+    recent = recent.slice(0, 10);
 
-  localStorage.setItem('recentlyViewed', JSON.stringify(recent));
+    localStorage.setItem('recentlyViewed', JSON.stringify(recent));
+  } catch {
+    /* ignore storage errors */
+  }
 }

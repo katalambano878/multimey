@@ -72,7 +72,8 @@ export default function ProductForm({ initialData, isEditMode = false }: Product
         ...v,
         stock: v.stock ?? v.quantity ?? 0,
         color: v.color ?? v.option2 ?? '',
-        size: v.name || ''
+        // Saved as option1 = size, option2 = colour; colour-only variants have name = colour.
+        size: v.option1 ?? (v.name && v.name !== v.option2 ? v.name : '')
     }));
 
     const [selectedColors, setSelectedColors] = useState<{ name: string; hex: string }[]>(() => {
@@ -351,13 +352,11 @@ export default function ProductForm({ initialData, isEditMode = false }: Product
 
             // Update Images
             if (productId) {
-                // Strategy: We will just delete all old images/variants and recreate them for simplicity in this MVP.
-                // In a clearer implementation, we would diff them.
-
-                // 1. Images
-                if (isEditMode) {
-                    await supabase.from('product_images').delete().eq('product_id', productId);
-                }
+                // 1. Images: insert the new set first, then remove the old rows,
+                // so a failed save never leaves the product without images.
+                const { data: oldImages } = isEditMode
+                    ? await supabase.from('product_images').select('id').eq('product_id', productId)
+                    : { data: [] as any[] };
                 if (images.length > 0) {
                     const imageInserts = images.map((img, idx) => ({
                         product_id: productId,
@@ -365,34 +364,52 @@ export default function ProductForm({ initialData, isEditMode = false }: Product
                         position: idx,
                         alt_text: productName
                     }));
-                    await supabase.from('product_images').insert(imageInserts);
+                    const { error: imgError } = await supabase.from('product_images').insert(imageInserts);
+                    if (imgError) throw imgError;
+                }
+                const oldImageIds = (oldImages || []).map((r: any) => r.id);
+                if (oldImageIds.length) {
+                    const { error: delImgError } = await supabase.from('product_images').delete().in('id', oldImageIds);
+                    if (delImgError) throw delImgError;
                 }
 
-                // 2. Variants
-                if (isEditMode) {
-                    // Be careful not to delete ALL variants if we want to preserve IDs etc, 
-                    // but for now, full replacement is safer to ensure sync.
-                    // Note: This might break order-item references if they rely on variant_id hard constraints without cascading.
-                    // Our Schema migration has ON DELETE SET NULL for order_items -> variant_id, so this is safe for now (but distinct from "archiving").
-                    await supabase.from('product_variants').delete().eq('product_id', productId);
+                // 2. Variants: update in place by colour/size so ids (and the
+                // orders and carts pointing at them) survive the save.
+                const existingByKey = new Map<string, string>();
+                existingVariants.forEach((v: any) => {
+                    if (v.id) existingByKey.set(buildVariantKey(v.color || '', v.size || ''), v.id);
+                });
+                const keptIds = new Set<string>();
+                for (const v of variants) {
+                    const colorHex = selectedColors.find(c => c.name === v.color)?.hex || null;
+                    const row = {
+                        product_id: productId,
+                        name: v.name || v.color || 'Default',
+                        sku: v.sku?.trim() || null,
+                        price: parseFloat(v.price) || 0,
+                        quantity: parseInt(v.stock) || 0,
+                        option1: v.name || null,
+                        option2: v.color?.trim() || null,
+                        metadata: colorHex ? { color_hex: colorHex } : {}
+                    };
+                    const existingId = isEditMode ? existingByKey.get(buildVariantKey(v.color || '', v.name || '')) : undefined;
+                    if (existingId) {
+                        keptIds.add(existingId);
+                        const { error: varError } = await supabase.from('product_variants').update(row).eq('id', existingId);
+                        if (varError) throw varError;
+                    } else {
+                        const { error: varError } = await supabase.from('product_variants').insert([row]);
+                        if (varError) throw varError;
+                    }
                 }
-
-                if (variants.length > 0) {
-                    const variantInserts = variants.map(v => {
-                        const colorHex = selectedColors.find(c => c.name === v.color)?.hex || null;
-                        return {
-                            product_id: productId,
-                            name: v.name || v.color || 'Default',
-                            sku: v.sku || null,
-                            price: parseFloat(v.price) || 0,
-                            quantity: parseInt(v.stock) || 0,
-                            option1: v.name || null,
-                            option2: v.color?.trim() || null,
-                            metadata: colorHex ? { color_hex: colorHex } : {}
-                        };
-                    });
-                    const { error: varError } = await supabase.from('product_variants').insert(variantInserts);
-                    if (varError) throw varError;
+                // Removed options: delete them, or zero their stock if past orders still reference them.
+                for (const id of Array.from(existingByKey.values())) {
+                    if (keptIds.has(id)) continue;
+                    await supabase.from('cart_items').delete().eq('variant_id', id);
+                    const { error: delError } = await supabase.from('product_variants').delete().eq('id', id);
+                    if (delError) {
+                        await supabase.from('product_variants').update({ quantity: 0 }).eq('id', id);
+                    }
                 }
             }
 

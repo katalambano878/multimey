@@ -1,4 +1,17 @@
+'use client';
+
+import { useCMS } from '@/context/CMSContext';
+
 export default function MaintenancePage() {
+  const { getSetting } = useCMS();
+  const whatsapp = (getSetting('social_whatsapp') || '').replace(/\D/g, '');
+  const socials = [
+    { href: getSetting('social_facebook'), icon: 'ri-facebook-fill', label: 'Facebook' },
+    { href: getSetting('social_instagram'), icon: 'ri-instagram-line', label: 'Instagram' },
+    { href: getSetting('social_tiktok'), icon: 'ri-tiktok-line', label: 'TikTok' },
+    { href: whatsapp ? `https://wa.me/${whatsapp}` : '', icon: 'ri-whatsapp-line', label: 'WhatsApp' },
+  ].filter((s) => s.href && /^https?:\/\//.test(s.href));
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-amber-50 flex items-center justify-center px-4">
       <div className="max-w-2xl mx-auto text-center">
@@ -87,18 +100,25 @@ export default function MaintenancePage() {
 
         <div className="text-gray-500 text-sm">
           <p className="mb-2">Thank you for your patience</p>
-          <p>Follow us on social media for real-time updates</p>
-          <div className="flex gap-4 justify-center mt-4">
-            <a href="#" className="w-10 h-10 bg-white border border-gray-200 rounded-full flex items-center justify-center hover:bg-gray-50 transition-colors">
-              <i className="ri-facebook-fill text-gray-600"></i>
-            </a>
-            <a href="#" className="w-10 h-10 bg-white border border-gray-200 rounded-full flex items-center justify-center hover:bg-gray-50 transition-colors">
-              <i className="ri-twitter-fill text-gray-600"></i>
-            </a>
-            <a href="#" className="w-10 h-10 bg-white border border-gray-200 rounded-full flex items-center justify-center hover:bg-gray-50 transition-colors">
-              <i className="ri-instagram-line text-gray-600"></i>
-            </a>
-          </div>
+          {socials.length > 0 && (
+            <>
+              <p>Follow us on social media for real-time updates</p>
+              <div className="flex gap-4 justify-center mt-4">
+                {socials.map((social) => (
+                  <a
+                    key={social.label}
+                    href={social.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={social.label}
+                    className="w-10 h-10 bg-white border border-gray-200 rounded-full flex items-center justify-center hover:bg-gray-50 transition-colors"
+                  >
+                    <i className={`${social.icon} text-gray-600`}></i>
+                  </a>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

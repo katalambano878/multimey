@@ -75,6 +75,7 @@ export default function POSPage() {
           categories(name),
           product_images(url)
         `)
+                .eq('status', 'active')
                 .order('name');
 
             if (prodData) {
@@ -111,7 +112,13 @@ export default function POSPage() {
     };
 
     // Cart Functions
+    // The till never sells more than is in stock.
     const addToCart = (product: Product) => {
+        const inCart = cart.find(item => item.id === product.id)?.cartQuantity || 0;
+        if (inCart + 1 > (product.quantity || 0)) {
+            alert(product.quantity > 0 ? `Only ${product.quantity} of ${product.name} in stock.` : `${product.name} is out of stock.`);
+            return;
+        }
         setCart(prev => {
             const existing = prev.find(item => item.id === product.id);
             if (existing) {
@@ -133,6 +140,7 @@ export default function POSPage() {
         setCart(prev => prev.map(item => {
             if (item.id === productId) {
                 const newQty = item.cartQuantity + delta;
+                if (newQty > (item.quantity || 0)) return item;
                 return newQty > 0 ? { ...item, cartQuantity: newQty } : item;
             }
             return item;
@@ -262,8 +270,10 @@ export default function POSPage() {
                     user_id: null,
                     email: customerEmail,
                     phone: customerPhone,
-                    status: isCashOrCard ? 'processing' : 'pending',
-                    payment_status: isCashOrCard ? 'paid' : 'pending',
+                    // Recorded as pending until its items are saved; mark_order_paid
+                    // below flips cash/card sales to paid and reduces stock once.
+                    status: 'pending',
+                    payment_status: 'pending',
                     currency: 'GHS',
                     subtotal: cartTotal,
                     tax_total: tax,
@@ -301,7 +311,10 @@ export default function POSPage() {
                 .from('order_items')
                 .insert(orderItems);
 
-            if (itemsError) throw itemsError;
+            if (itemsError) {
+                await supabase.from('orders').delete().eq('id', order.id);
+                throw itemsError;
+            }
 
             // 3. Upsert Customer Record (email is required in customers table)
             const hasRealEmail = customerEmail && customerEmail !== 'pos-walkin@store.local';
@@ -333,14 +346,21 @@ export default function POSPage() {
             // 4. If Cash or Card — mark as paid, reduce stock
             if (isCashOrCard) {
                 // Call mark_order_paid to reduce stock (uses order_number as order_ref)
-                try {
-                    await supabase.rpc('mark_order_paid', {
-                        order_ref: orderNumber,
-                        moolre_ref: `POS-${paymentMethod.toUpperCase()}-${Date.now()}`
-                    });
-                } catch (stockErr) {
-                    console.error('Stock reduction error (non-fatal):', stockErr);
+                const { error: paidError } = await supabase.rpc('mark_order_paid', {
+                    order_ref: orderNumber,
+                    moolre_ref: `POS-${paymentMethod.toUpperCase()}-${Date.now()}`
+                });
+                if (paidError) {
+                    throw new Error(`Order ${orderNumber} was saved but could not be marked paid: ${paidError.message}. Open it in Orders to finish.`);
                 }
+                if (upsertEmail) {
+                    const { error: statsError } = await supabase.rpc('update_customer_stats', {
+                        p_customer_email: upsertEmail,
+                        p_order_total: grandTotal
+                    });
+                    if (statsError) console.error('Customer stats error (non-fatal):', statsError.message);
+                }
+                fetchData();
 
                 // Success — show completed
                 setCompletedOrder({ id: order.id, orderNumber, total: grandTotal, items: cart });

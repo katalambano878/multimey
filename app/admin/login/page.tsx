@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
@@ -14,6 +14,13 @@ export default function AdminLoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const { getToken, verifying } = useRecaptcha();
+
+  // Explain why the middleware or layout sent the user here.
+  useEffect(() => {
+    const reason = new URLSearchParams(window.location.search).get('error');
+    if (reason === 'unauthorized') setError('This account does not have admin access.');
+    else if (reason === 'session_expired') setError('Your session has expired. Please sign in again.');
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,7 +44,19 @@ export default function AdminLoginPage() {
       if (error) throw error;
 
       if (data.session) {
-        router.push('/admin');
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', data.session.user.id)
+          .maybeSingle();
+        if (profile?.role !== 'admin' && profile?.role !== 'staff') {
+          await supabase.auth.signOut();
+          throw new Error('This account does not have admin access.');
+        }
+        // Only follow redirects back into the admin area.
+        const redirect = new URLSearchParams(window.location.search).get('redirect') || '';
+        const target = /^\/admin(\/[\w\-/]*)?$/.test(redirect) && redirect !== '/admin/login' ? redirect : '/admin';
+        router.push(target);
         router.refresh();
       }
     } catch (err: any) {

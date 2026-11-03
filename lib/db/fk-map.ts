@@ -37,12 +37,16 @@ export const FK_MAP: Record<string, FkEdge[]> = {
     { column: "menu_id", foreignTable: "navigation_menus", foreignColumn: "id" },
     { column: "parent_id", foreignTable: "navigation_items", foreignColumn: "id" },
   ],
+  orders: [
+    { column: "user_id", foreignTable: "profiles", foreignColumn: "id" },
+  ],
   order_items: [
     { column: "order_id", foreignTable: "orders", foreignColumn: "id" },
     { column: "product_id", foreignTable: "products", foreignColumn: "id" },
     { column: "variant_id", foreignTable: "product_variants", foreignColumn: "id" },
   ],
   order_status_history: [
+    { column: "created_by", foreignTable: "profiles", foreignColumn: "id" },
     { column: "order_id", foreignTable: "orders", foreignColumn: "id" },
   ],
   product_images: [
@@ -63,13 +67,18 @@ export const FK_MAP: Record<string, FkEdge[]> = {
     },
   ],
   return_requests: [
+    { column: "user_id", foreignTable: "profiles", foreignColumn: "id" },
     { column: "order_id", foreignTable: "orders", foreignColumn: "id" },
   ],
   review_images: [
     { column: "review_id", foreignTable: "reviews", foreignColumn: "id" },
   ],
   reviews: [
+    { column: "user_id", foreignTable: "profiles", foreignColumn: "id" },
     { column: "product_id", foreignTable: "products", foreignColumn: "id" },
+  ],
+  support_tickets: [
+    { column: "user_id", foreignTable: "profiles", foreignColumn: "id" },
   ],
   support_messages: [
     { column: "ticket_id", foreignTable: "support_tickets", foreignColumn: "id" },

@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
-import { cachedQuery, invalidateCache } from '@/lib/query-cache';
+import { cachedQuery } from '@/lib/query-cache';
+import Link from 'next/link';
 import { useRecaptcha } from '@/hooks/useRecaptcha';
 
 interface Review {
@@ -28,6 +29,7 @@ export default function ProductReviews({ productId }: ProductReviewsProps) {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
+  const [submitMessage, setSubmitMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const [reviewForm, setReviewForm] = useState({
     rating: 5,
@@ -59,7 +61,7 @@ export default function ProductReviews({ productId }: ProductReviewsProps) {
 
         const formattedReviews = data.map((r: any) => ({
           id: r.id,
-          author: 'Verified Customer', // or fetch from profiles if we had it joined
+          author: 'Customer', // reviewer profiles are private
           rating: r.rating,
           date: r.created_at,
           verified: r.verified_purchase,
@@ -105,42 +107,39 @@ export default function ProductReviews({ productId }: ProductReviewsProps) {
 
   const handleSubmitReview = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSubmitMessage(null);
     if (!user) {
-      alert('Please login to submit a review');
+      setSubmitMessage({ type: 'error', text: 'Please sign in to submit a review.' });
       return;
     }
 
     // reCAPTCHA verification
     const isHuman = await getToken('review');
     if (!isHuman) {
-      alert('Security verification failed. Please try again.');
+      setSubmitMessage({ type: 'error', text: 'Security verification failed. Please try again.' });
       return;
     }
 
     setIsSubmitting(true);
 
     try {
+      // New reviews are held for moderation (the server forces status 'pending')
       const { error } = await supabase.from('reviews').insert([{
         product_id: productId,
         user_id: user.id,
         rating: reviewForm.rating,
         title: reviewForm.title,
         content: reviewForm.content,
-        status: 'approved', // Auto-approve for demo
-        verified_purchase: false // We could check orders here but keeping it simple
       }]);
 
       if (error) throw error;
 
-      alert('Review submitted successfully!');
+      setSubmitMessage({ type: 'success', text: 'Thanks! Your review will appear once approved.' });
       setShowReviewForm(false);
       setReviewForm({ rating: 5, title: '', content: '' });
-      invalidateCache(`reviews:${productId}`); // Clear cache so fresh data is fetched
-      fetchReviews(); // Refresh list
-
     } catch (err: any) {
       console.error('Submit review error:', err);
-      alert('Failed to submit review: ' + err.message);
+      setSubmitMessage({ type: 'error', text: 'We could not submit your review. Please try again later.' });
     } finally {
       setIsSubmitting(false);
     }
@@ -176,7 +175,7 @@ export default function ProductReviews({ productId }: ProductReviewsProps) {
                   ></i>
                 ))}
               </div>
-              <p className="text-gray-600">Based on {reviews.length} reviews</p>
+              <p className="text-gray-600">Based on {reviews.length} {reviews.length === 1 ? 'review' : 'reviews'}</p>
             </div>
 
             <div className="md:col-span-2">
@@ -229,6 +228,15 @@ export default function ProductReviews({ productId }: ProductReviewsProps) {
         </>
       )}
 
+      {submitMessage && (
+        <div
+          role="status"
+          className={`mb-6 p-4 rounded-lg text-sm ${submitMessage.type === 'success' ? 'bg-gray-100 text-gray-900' : 'bg-red-50 text-red-800'}`}
+        >
+          {submitMessage.text}
+        </div>
+      )}
+
       {showReviewForm && (
         <form onSubmit={handleSubmitReview} className="bg-gray-50 rounded-xl p-6 mb-8">
           <h3 className="text-lg font-bold text-gray-900 mb-4">Write Your Review</h3>
@@ -254,7 +262,7 @@ export default function ProductReviews({ productId }: ProductReviewsProps) {
 
           {!user && (
             <div className="mb-4 p-4 bg-amber-50 text-amber-800 rounded-lg">
-              You must be logged in to submit a review.
+              Please <Link href="/auth/login" className="font-semibold underline">sign in</Link> to write a review.
             </div>
           )}
 
@@ -317,7 +325,7 @@ export default function ProductReviews({ productId }: ProductReviewsProps) {
                     {review.verified && (
                       <span className="flex items-center text-xs text-gray-900 bg-gray-50 px-2 py-1 rounded">
                         <i className="ri-checkbox-circle-fill mr-1"></i>
-                        Verified Must Have
+                        Verified purchase
                       </span>
                     )}
                   </div>
@@ -337,14 +345,7 @@ export default function ProductReviews({ productId }: ProductReviewsProps) {
             </div>
 
             <h4 className="font-semibold text-gray-900 mb-2">{review.title}</h4>
-            <p className="text-gray-700 mb-4">{review.content}</p>
-
-            <div className="flex items-center space-x-4 text-sm">
-              <button className="flex items-center space-x-1 text-gray-600 hover:text-gray-900 transition-colors">
-                <i className="ri-thumb-up-line"></i>
-                <span>Helpful ({review.helpful})</span>
-              </button>
-            </div>
+            <p className="text-gray-700">{review.content}</p>
           </div>
         ))}
       </div>

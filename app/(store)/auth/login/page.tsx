@@ -57,7 +57,9 @@ export default function LoginPage() {
       if (error) throw error;
 
       if (data.session) {
-        router.push('/account');
+        // Return to the page that sent the shopper here (same-site paths only).
+        const redirect = new URLSearchParams(window.location.search).get('redirect') || '';
+        router.push(/^\/(?!\/)[\w\-/?=&.%]*$/.test(redirect) && !redirect.startsWith('/admin') ? redirect : '/account');
         router.refresh();
       }
     } catch (error: any) {

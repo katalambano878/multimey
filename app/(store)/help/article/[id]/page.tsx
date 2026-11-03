@@ -2,9 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
-import Header from '@/components/Header';
-import Footer from '@/components/Footer';
+import { useParams, notFound } from 'next/navigation';
 import { sanitizeHtml } from '@/lib/sanitize';
 import { useCMS } from '@/context/CMSContext';
 import { getArticles, relatedArticles } from './help-articles-data';
@@ -16,7 +14,9 @@ export default function ArticlePage() {
   const contactPhone = getSetting('contact_phone') || '+233209597443';
   const articles = getArticles(contactPhone, contactEmail);
   const articleId = params?.id as string | undefined;
-  const article = (articleId && articles[articleId as keyof typeof articles]) || articles['1'];
+  const article = articleId && Object.prototype.hasOwnProperty.call(articles, articleId)
+    ? articles[articleId as keyof typeof articles]
+    : null;
   
   const [wasHelpful, setWasHelpful] = useState<boolean | null>(null);
   const [showFeedback, setShowFeedback] = useState(false);
@@ -26,9 +26,12 @@ export default function ArticlePage() {
     setShowFeedback(true);
   };
 
+  if (!article) {
+    notFound();
+  }
+
   return (
     <>
-      <Header />
       <main className="min-h-screen bg-gray-50 py-12">
         <div className="max-w-4xl mx-auto px-4">
           <Link
@@ -150,7 +153,6 @@ export default function ArticlePage() {
           </div>
         </div>
       </main>
-      <Footer />
     </>
   );
 }

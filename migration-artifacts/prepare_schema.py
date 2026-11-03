@@ -39,9 +39,12 @@ text = re.sub(
 body, funcs = extract_functions(text)
 
 # Replace uuid_generate_v4 with gen_random_uuid for plain Postgres
-body = body.replace("uuid_generate_v4()", "gen_random_uuid()")
 body = body.replace("extensions.uuid_generate_v4()", "gen_random_uuid()")
+body = body.replace("extensions.gen_random_uuid()", "gen_random_uuid()")
+body = body.replace("uuid_generate_v4()", "gen_random_uuid()")
 for i, fn in enumerate(funcs):
+    fn = fn.replace("extensions.uuid_generate_v4()", "gen_random_uuid()")
+    fn = fn.replace("extensions.gen_random_uuid()", "gen_random_uuid()")
     funcs[i] = fn.replace("uuid_generate_v4()", "gen_random_uuid()")
 
 final = (

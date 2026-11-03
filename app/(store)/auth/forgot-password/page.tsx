@@ -1,109 +1,45 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
-import { useRecaptcha } from '@/hooks/useRecaptcha';
+import { useCMS } from '@/context/CMSContext';
 
 export default function ForgotPasswordPage() {
-  const [email, setEmail] = useState('');
-  const [isSubmitted, setIsSubmitted] = useState(false);
-  const [error, setError] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const { getToken, verifying } = useRecaptcha();
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setIsLoading(true);
-
-    if (!email) {
-      setError('Email is required');
-      setIsLoading(false);
-      return;
-    }
-    if (!/\S+@\S+\.\S+/.test(email)) {
-      setError('Please enter a valid email');
-      setIsLoading(false);
-      return;
-    }
-
-    // reCAPTCHA verification
-    const isHuman = await getToken('forgot_password');
-    if (!isHuman) {
-      setError('Security verification failed. Please try again.');
-      setIsLoading(false);
-      return;
-    }
-
-    setTimeout(() => {
-      setIsLoading(false);
-      setIsSubmitted(true);
-    }, 1500);
-  };
-
-  if (isSubmitted) {
-    return (
-      <main className="min-h-screen bg-gray-50 flex items-center justify-center py-12 px-4 sm:px-6">
-        <div className="max-w-md w-full">
-          <div className="bg-white rounded-xl shadow-sm p-8 text-center">
-            <div className="w-16 h-16 flex items-center justify-center bg-gray-100 rounded-full mx-auto mb-6">
-              <i className="ri-mail-send-line text-3xl text-gray-900"></i>
-            </div>
-            <h1 className="text-2xl font-bold text-gray-900 mb-3">Check Your Email</h1>
-            <p className="text-gray-600 mb-6">
-              We've sent a password reset link to <strong>{email}</strong>
-            </p>
-            <p className="text-sm text-gray-500 mb-8">
-              If you don't receive an email within a few minutes, please check your spam folder.
-            </p>
-            <Link
-              href="/auth/login"
-              className="inline-block bg-gray-900 hover:bg-gray-800 text-white px-8 py-3 rounded-lg font-semibold transition-colors whitespace-nowrap"
-            >
-              Back to Sign In
-            </Link>
-          </div>
-        </div>
-      </main>
-    );
-  }
+  const { getSetting } = useCMS();
+  const whatsappNumber = getSetting('social_whatsapp') || getSetting('contact_phone') || '+233209597443';
+  const whatsappDigits = whatsappNumber.replace(/\D/g, '');
+  const whatsappLink = `https://wa.me/${whatsappDigits}?text=${encodeURIComponent('Hi, I need help resetting the password for my MultiMey Supplies account.')}`;
 
   return (
     <main className="min-h-screen bg-gray-50 flex items-center justify-center py-12 px-4 sm:px-6">
       <div className="max-w-md w-full">
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-gray-900 mb-2">Reset Password</h1>
-          <p className="text-gray-600">Enter your email to receive a reset link</p>
+          <p className="text-gray-600">We&apos;ll help you get back into your account</p>
         </div>
 
         <div className="bg-white rounded-xl shadow-sm p-8">
-          <form onSubmit={handleSubmit} className="space-y-6">
-            <div>
-              <label className="block text-sm font-semibold text-gray-900 mb-2">
-                Email Address
-              </label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className={`w-full px-4 py-3 border-2 rounded-lg focus:ring-2 focus:ring-gray-600 focus:border-gray-600 ${
-                  error ? 'border-red-500' : 'border-gray-300'
-                }`}
-                placeholder="you@example.com"
-              />
-              {error && (
-                <p className="text-sm text-red-600 mt-2">{error}</p>
-              )}
-            </div>
+          <div className="w-16 h-16 flex items-center justify-center bg-green-50 rounded-full mx-auto mb-6">
+            <i className="ri-whatsapp-line text-3xl text-green-600"></i>
+          </div>
+          <p className="text-gray-700 mb-4 text-center">
+            To reset your password, message us on WhatsApp from the phone number or email linked to your account.
+          </p>
+          <ol className="text-sm text-gray-600 space-y-2 mb-8 list-decimal list-inside">
+            <li>Tap the button below to open WhatsApp.</li>
+            <li>Tell us the email address you signed up with.</li>
+            <li>Our team will verify your account and help you set a new password.</li>
+          </ol>
 
-            <button
-              type="submit"
-              disabled={isLoading || verifying}
-              className="w-full bg-gray-900 hover:bg-gray-800 text-white py-4 rounded-lg font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-            >
-              {isLoading || verifying ? (verifying ? 'Verifying...' : 'Sending...') : 'Send Reset Link'}
-            </button>
-          </form>
+          <a
+            href={whatsappLink}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center justify-center gap-2 w-full bg-gray-900 hover:bg-gray-800 text-white py-4 rounded-lg font-semibold transition-colors whitespace-nowrap"
+          >
+            <i className="ri-whatsapp-line text-xl"></i>
+            Message us on WhatsApp
+          </a>
+          <p className="mt-3 text-center text-sm text-gray-500">{whatsappNumber}</p>
 
           <p className="mt-8 text-center text-gray-600">
             Remember your password?{' '}

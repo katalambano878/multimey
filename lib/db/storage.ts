@@ -21,11 +21,12 @@ function publicBase(): string {
 }
 
 function signingSecret(): string {
-  return (
-    process.env.STORAGE_SIGNING_SECRET ||
-    process.env.JWT_SECRET ||
-    "storage-dev-secret"
-  );
+  const secret = process.env.STORAGE_SIGNING_SECRET || process.env.JWT_SECRET;
+  if (secret) return secret;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("STORAGE_SIGNING_SECRET is not set.");
+  }
+  return "storage-dev-secret";
 }
 
 export function signObjectToken(bucket: string, objectPath: string, expEpoch: number): string {
@@ -49,11 +50,15 @@ export function verifyObjectToken(
   return out === 0;
 }
 
+const BUCKET_RE = /^[a-z0-9][a-z0-9_-]*$/;
+
 function safeJoin(bucket: string, objectPath: string): string {
+  if (!BUCKET_RE.test(bucket)) throw new Error("Invalid bucket");
   const clean = objectPath.replace(/^\/+/, "");
-  const full = path.normalize(path.join(STORAGE_ROOT, bucket, clean));
-  const base = path.normalize(path.join(STORAGE_ROOT, bucket));
-  if (!full.startsWith(base)) throw new Error("Path traversal blocked");
+  if (!clean || clean.endsWith(".meta.json")) throw new Error("Invalid object path");
+  const base = path.resolve(STORAGE_ROOT, bucket);
+  const full = path.resolve(base, clean);
+  if (!full.startsWith(base + path.sep)) throw new Error("Path traversal blocked");
   return full;
 }
 
@@ -116,6 +121,13 @@ export function createStorageClient(): StorageClient {
           try {
             const full = safeJoin(bucket, objectPath);
             await fs.mkdir(path.dirname(full), { recursive: true });
+            if (!opts?.upsert) {
+              const exists = await fs
+                .stat(full)
+                .then(() => true)
+                .catch(() => false);
+              if (exists) return { data: null, error: { message: "The resource already exists" } };
+            }
             let buf: Buffer;
             if (data instanceof Buffer) buf = data;
             else if (data instanceof Uint8Array) buf = Buffer.from(data);

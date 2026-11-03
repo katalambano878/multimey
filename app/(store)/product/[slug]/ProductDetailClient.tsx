@@ -6,9 +6,11 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { cachedQuery } from '@/lib/query-cache';
 import ProductCard from '@/components/ProductCard';
+import ProductReviews from '@/components/ProductReviews';
 import { StructuredData, generateProductSchema, generateBreadcrumbSchema } from '@/components/SEOHead';
 import { notFound } from 'next/navigation';
 import { useCart } from '@/context/CartContext';
+import { useWishlist } from '@/context/WishlistContext';
 import { usePageTitle } from '@/hooks/usePageTitle';
 
 // Map common color names to hex values for the swatch preview
@@ -35,10 +37,10 @@ export default function ProductDetailClient({ slug }: { slug: string }) {
   const [selectedColor, setSelectedColor] = useState('');
   const [selectedSize, setSelectedSize] = useState('');
   const [quantity, setQuantity] = useState(1);
-  const [isWishlisted, setIsWishlisted] = useState(false);
   const [relatedProducts, setRelatedProducts] = useState<any[]>([]);
 
   const { addToCart } = useCart();
+  const { addToWishlist, removeFromWishlist, isInWishlist } = useWishlist();
 
   useEffect(() => {
     async function fetchProduct() {
@@ -52,7 +54,7 @@ export default function ProductDetailClient({ slug }: { slug: string }) {
               .from('products')
               .select(`
                 *,
-                categories(name),
+                categories(name, slug),
                 product_variants(*),
                 product_images(url, position, alt_text)
               `)
@@ -99,8 +101,9 @@ export default function ProductDetailClient({ slug }: { slug: string }) {
           ...productData,
           images: productData.product_images?.sort((a: any, b: any) => a.position - b.position).map((img: any) => img.url) || [],
           category: productData.categories?.name || 'Shop',
+          categorySlug: productData.categories?.slug || '',
           rating: productData.rating_avg || 0,
-          reviewCount: 0,
+          reviewCount: productData.review_count || 0,
           stockCount: productData.quantity,
           moq: productData.moq || 1,
           colors: [...new Set(rawVariants.map((v: any) => v.color).filter(Boolean))],
@@ -191,6 +194,36 @@ export default function ProductDetailClient({ slug }: { slug: string }) {
   const activePrice = selectedVariant?.price ?? product?.price ?? 0;
   const activeStock = selectedVariant ? (selectedVariant.stock ?? selectedVariant.quantity ?? product?.stockCount ?? 0) : (product?.stockCount ?? 0);
 
+  // Keep quantity within the selected variant's stock and the product MOQ
+  useEffect(() => {
+    if (!product) return;
+    const moq = product.moq || 1;
+    setQuantity((q) => {
+      let next = Math.max(q, moq);
+      if (activeStock >= moq) next = Math.min(next, activeStock);
+      return next;
+    });
+  }, [product, selectedVariant, activeStock]);
+
+  const isWishlisted = product ? isInWishlist(product.id) : false;
+  const toggleWishlist = () => {
+    if (!product) return;
+    if (isWishlisted) {
+      removeFromWishlist(product.id);
+      return;
+    }
+    addToWishlist({
+      id: product.id,
+      name: product.name,
+      price: hasVariants ? Math.min(...product.variants.map((v: any) => v.price || product.price)) : product.price,
+      originalPrice: product.compare_at_price || undefined,
+      image: product.images[0],
+      rating: product.rating,
+      inStock: (product.stockCount ?? 0) > 0 || product.variants.some((v: any) => (v.stock ?? v.quantity ?? 0) > 0),
+      slug: product.slug || product.id,
+    });
+  };
+
   const handleAddToCart = () => {
     if (!product) return;
     if (needsVariantSelection) return; // Safety check
@@ -214,6 +247,7 @@ export default function ProductDetailClient({ slug }: { slug: string }) {
       image: product.images[0],
       quantity: quantity,
       variant: variantLabel,
+      variantId: selectedVariant?.id,
       slug: product.slug,
       maxStock: activeStock,
       moq: product.moq || 1
@@ -267,7 +301,7 @@ export default function ProductDetailClient({ slug }: { slug: string }) {
   const breadcrumbSchema = generateBreadcrumbSchema([
     { name: 'Home', url: baseUrl },
     { name: 'Shop', url: `${baseUrl}/shop` },
-    { name: product.category, url: `${baseUrl}/shop?category=${product.category.toLowerCase().replace(/\s+/g, '-')}` },
+    { name: product.category, url: product.categorySlug ? `${baseUrl}/shop?category=${encodeURIComponent(product.categorySlug)}` : `${baseUrl}/shop` },
     { name: product.name, url: `${baseUrl}/product/${slug}` }
   ]);
 
@@ -284,7 +318,7 @@ export default function ProductDetailClient({ slug }: { slug: string }) {
               <i className="ri-arrow-right-s-line text-gray-400"></i>
               <Link href="/shop" className="text-gray-600 hover:text-gray-700 transition-colors">Shop</Link>
               <i className="ri-arrow-right-s-line text-gray-400"></i>
-              <Link href="#" className="text-gray-600 hover:text-gray-700 transition-colors">{product.category}</Link>
+              <Link href={product.categorySlug ? `/shop?category=${encodeURIComponent(product.categorySlug)}` : '/shop'} className="text-gray-600 hover:text-gray-700 transition-colors">{product.category}</Link>
               <i className="ri-arrow-right-s-line text-gray-400"></i>
               <span className="text-gray-900 font-medium truncate max-w-[200px]">{product.name}</span>
             </nav>
@@ -353,12 +387,14 @@ export default function ProductDetailClient({ slug }: { slug: string }) {
                             <span className="font-bold text-gray-900">{Number(product.rating).toFixed(1)}</span>
                           </div>
                           <span className="text-gray-300">|</span>
-                          <span className="text-gray-500 hover:text-brand-blue cursor-pointer transition-colors underline decoration-gray-200 underline-offset-4">{product.reviewCount} reviews</span>
+                          <a href="#reviews" className="text-gray-500 hover:text-brand-blue cursor-pointer transition-colors underline decoration-gray-200 underline-offset-4">{product.reviewCount} {product.reviewCount === 1 ? 'review' : 'reviews'}</a>
                         </div>
                       </div>
                     </div>
                     <button
-                      onClick={() => setIsWishlisted(!isWishlisted)}
+                      onClick={toggleWishlist}
+                      aria-label={isWishlisted ? 'Remove from wishlist' : 'Add to wishlist'}
+                      aria-pressed={isWishlisted}
                       className="w-12 h-12 flex-shrink-0 flex items-center justify-center border border-gray-200 bg-white hover:bg-brand-gold/20 rounded-full transition-all cursor-pointer ml-4 shadow-sm group"
                     >
                       <i className={`${isWishlisted ? 'ri-heart-fill text-brand-blue' : 'ri-heart-line text-gray-400 group-hover:text-brand-blue'} text-xl transition-colors`}></i>
@@ -647,6 +683,11 @@ export default function ProductDetailClient({ slug }: { slug: string }) {
           </div>
         </section>
 
+        <section id="reviews" className="py-16 bg-gray-50">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6">
+            <ProductReviews productId={product.id} />
+          </div>
+        </section>
 
         {relatedProducts.length > 0 && (
           <section className="py-20 bg-white" data-product-shop>

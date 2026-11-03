@@ -23,27 +23,24 @@ function ShopContent() {
   const [totalProducts, setTotalProducts] = useState(0);
 
   // Filters
-  const [selectedCategory, setSelectedCategory] = useState('all');
+  const parsePage = (value: string | null) => {
+    const p = value ? parseInt(value, 10) : 1;
+    return !isNaN(p) && p >= 1 ? p : 1;
+  };
+  const [selectedCategory, setSelectedCategory] = useState(() => searchParams.get('category') || 'all');
   const [priceRange, setPriceRange] = useState([0, 5000]);
   const [selectedRating, setSelectedRating] = useState(0);
-  const [sortBy, setSortBy] = useState('popular');
+  const [sortBy, setSortBy] = useState(() => searchParams.get('sort') || 'popular');
   const [isFilterOpen, setIsFilterOpen] = useState(false);
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(() => parsePage(searchParams.get('page')));
   const productsPerPage = 9;
 
   // Initialize from URL params (keeps position when returning from product page)
   useEffect(() => {
-    const category = searchParams.get('category');
-    const sort = searchParams.get('sort');
-    const type = searchParams.get('type');
-    const pageParam = searchParams.get('page');
-
-    if (category) setSelectedCategory(category);
-    if (sort) setSortBy(sort);
-    if (pageParam) {
-      const p = parseInt(pageParam, 10);
-      if (!isNaN(p) && p >= 1) setPage(p);
-    }
+    // The URL is the source of truth: missing params mean the defaults.
+    setSelectedCategory(searchParams.get('category') || 'all');
+    setSortBy(searchParams.get('sort') || 'popular');
+    setPage(parsePage(searchParams.get('page')));
     // type (retail/closet) is read from searchParams in fetch and classificationParam below
   }, [searchParams]);
 
@@ -54,6 +51,16 @@ function ShopContent() {
     params.delete('page'); // reset to page 1
     setPage(1);
     router.push(`${pathname}${params.toString() ? `?${params.toString()}` : ''}`);
+  };
+
+  const selectCategory = (slug: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (slug === 'all') params.delete('category');
+    else params.set('category', slug);
+    params.delete('page'); // reset to page 1
+    setSelectedCategory(slug);
+    setPage(1);
+    router.push(`${pathname}${params.toString() ? `?${params.toString()}` : ''}`, { scroll: false });
   };
 
   const goToPage = (newPage: number) => {
@@ -89,7 +96,9 @@ function ShopContent() {
         const classification = searchParams.get('type'); // 'retail' or 'closet'
 
         // Build cache key from all filter params
-        const cacheKey = `shop:${selectedCategory}:${search || ''}:${classification || ''}:${priceRange.join('-')}:${selectedRating}:${sortBy}:${page}`;
+        // Category count is part of the key: a parent category's subcategories are only
+        // known once categories load, so the result must be refetched then.
+        const cacheKey = `shop:${selectedCategory}:${categories.length}:${search || ''}:${classification || ''}:${priceRange.join('-')}:${selectedRating}:${sortBy}:${page}`;
 
         const { data, count, error } = await cachedQuery<{ data: any; count: any; error: any }>(
           cacheKey,
@@ -235,7 +244,7 @@ function ShopContent() {
     }
 
     fetchProducts();
-  }, [selectedCategory, priceRange, selectedRating, sortBy, page, searchParams]);
+  }, [selectedCategory, priceRange, selectedRating, sortBy, page, searchParams, categories]);
 
   const totalPages = Math.ceil(totalProducts / productsPerPage);
 
@@ -321,8 +330,7 @@ function ShopContent() {
                       <div className="space-y-1">
                         <button
                           onClick={() => {
-                            setSelectedCategory('all');
-                            setPage(1);
+                            selectCategory('all');
                             setIsFilterOpen(false);
                           }}
                           className={`w-full text-left px-4 py-2 rounded-xl transition-colors ${selectedCategory === 'all'
@@ -344,8 +352,7 @@ function ShopContent() {
                             <div key={parent.id} className="space-y-1">
                               <button
                                 onClick={() => {
-                                  setSelectedCategory(parent.slug);
-                                  setPage(1);
+                                  selectCategory(parent.slug);
                                   // Don't close filter immediately if exploring hierarchy
                                 }}
                                 className={`w-full text-left px-4 py-2 rounded-xl transition-colors flex justify-between items-center ${isSelected
@@ -363,8 +370,7 @@ function ShopContent() {
                                     <button
                                       key={child.id}
                                       onClick={() => {
-                                        setSelectedCategory(child.slug);
-                                        setPage(1);
+                                        selectCategory(child.slug);
                                         setIsFilterOpen(false);
                                       }}
                                       className={`w-full text-left px-4 py-1.5 rounded-lg text-sm transition-colors ${selectedCategory === child.slug
@@ -504,11 +510,15 @@ function ShopContent() {
                       <p className="text-gray-600 mb-8">Try adjusting your filters to find what you're looking for</p>
                       <button
                         onClick={() => {
-                          setSelectedCategory('all');
                           setPriceRange([0, 5000]);
                           setSelectedRating(0);
+                          const params = new URLSearchParams(searchParams.toString());
+                          params.delete('category');
+                          params.delete('type');
+                          params.delete('page');
+                          setSelectedCategory('all');
                           setPage(1);
-                          setSection('all');
+                          router.push(`${pathname}${params.toString() ? `?${params.toString()}` : ''}`);
                         }}
                         className="inline-flex items-center bg-gray-900 hover:bg-gray-900 text-white px-6 py-3 rounded-lg font-medium transition-colors whitespace-nowrap"
                       >

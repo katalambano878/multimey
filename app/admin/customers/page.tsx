@@ -213,12 +213,39 @@ export default function AdminCustomersPage() {
     'Inactive': 'bg-gray-100 text-gray-700'
   };
 
-  const handleSelectAll = () => {
-    if (selectedCustomers.length === customers.length) {
-      setSelectedCustomers([]);
-    } else {
-      setSelectedCustomers(customers.map(c => c.id));
+  const exportCustomers = (list: any[]) => {
+    const cell = (v: unknown) => {
+      const text = v == null ? '' : String(v);
+      return `"${(/^[=+\-@]/.test(text) ? `'${text}` : text).replace(/"/g, '""')}"`;
+    };
+    const rows = [
+      ['Name', 'Email', 'Phone', 'Orders', 'Total Spent (GHS)', 'Joined', 'Status', 'Account'],
+      ...list.map(c => [c.name, c.email, c.phone, c.orders, Number(c.totalSpent).toFixed(2), c.joined, c.status, c.isGuest ? 'Guest' : 'Registered'])
+    ];
+    const blob = new Blob([rows.map(r => r.map(cell).join(',')).join('\n')], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `customers-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  const emailSelected = () => {
+    const emails = customers
+      .filter(c => selectedCustomers.includes(c.id) && c.email && !String(c.email).endsWith('@pos.local'))
+      .map(c => c.email);
+    if (emails.length === 0) {
+      alert('None of the selected customers has an email address.');
+      return;
     }
+    window.location.href = `mailto:?bcc=${encodeURIComponent(emails.join(','))}`;
+  };
+
+  const handleSelectAll = () => {
+    const visibleIds = filteredCustomers.map(c => c.id);
+    const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedCustomers.includes(id));
+    setSelectedCustomers(allVisibleSelected ? [] : visibleIds);
   };
 
   const handleSelectCustomer = (customerId: string) => {
@@ -279,7 +306,7 @@ export default function AdminCustomersPage() {
           <h1 className="text-3xl font-bold text-gray-900">Customers</h1>
           <p className="text-gray-600 mt-1">Manage your customer base and relationships</p>
         </div>
-        <button className="bg-gray-900 hover:bg-gray-800 text-white px-6 py-3 rounded-lg font-semibold transition-colors whitespace-nowrap cursor-pointer">
+        <button onClick={() => exportCustomers(filteredCustomers)} className="bg-gray-900 hover:bg-gray-800 text-white px-6 py-3 rounded-lg font-semibold transition-colors whitespace-nowrap cursor-pointer">
           <i className="ri-download-line mr-2"></i>
           Export Customers
         </button>
@@ -352,15 +379,11 @@ export default function AdminCustomersPage() {
               {selectedCustomers.length} customer{selectedCustomers.length > 1 ? 's' : ''} selected
             </p>
             <div className="flex items-center space-x-2">
-              <button className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors whitespace-nowrap cursor-pointer">
+              <button onClick={emailSelected} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors whitespace-nowrap cursor-pointer">
                 <i className="ri-mail-line mr-2"></i>
                 Send Email
               </button>
-              <button className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm font-medium transition-colors whitespace-nowrap cursor-pointer">
-                <i className="ri-vip-crown-line mr-2"></i>
-                Mark as VIP
-              </button>
-              <button className="px-4 py-2 bg-gray-700 hover:bg-gray-800 text-white rounded-lg text-sm font-medium transition-colors whitespace-nowrap cursor-pointer">
+              <button onClick={() => exportCustomers(customers.filter(c => selectedCustomers.includes(c.id)))} className="px-4 py-2 bg-gray-700 hover:bg-gray-800 text-white rounded-lg text-sm font-medium transition-colors whitespace-nowrap cursor-pointer">
                 <i className="ri-download-line mr-2"></i>
                 Export
               </button>

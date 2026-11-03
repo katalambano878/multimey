@@ -85,6 +85,7 @@ def psql(sql: str, as_user: str = "postgres", db: str = DB, stop=True):
 def psql_file(path: Path, as_user: str = "postgres"):
     content = path.read_text()
     content = content.replace("extensions.uuid_generate_v4()", "gen_random_uuid()")
+    content = content.replace("extensions.gen_random_uuid()", "gen_random_uuid()")
     content = content.replace("uuid_generate_v4()", "gen_random_uuid()")
     cmd = [
         "docker", "exec", "-i", "fleet-postgres",

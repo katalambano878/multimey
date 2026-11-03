@@ -2,36 +2,53 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { supabase } from '@/lib/supabase';
+import { useCMS } from '@/context/CMSContext';
+import { toWhatsAppNumber } from '@/lib/contact';
 
 export default function PrivacySettingsPage() {
+  const { getSetting } = useCMS();
   const [exporting, setExporting] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [exportMessage, setExportMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const whatsappNumber = getSetting('social_whatsapp') || getSetting('contact_phone') || '+233209597443';
+  const waDigits = toWhatsAppNumber(whatsappNumber);
+  const whatsappHref = waDigits
+    ? `https://wa.me/${waDigits}?text=${encodeURIComponent('Hi, I would like to delete my MultiMey Supplies account.')}`
+    : '/contact';
 
   const handleExportData = async () => {
     setExporting(true);
-    
-    setTimeout(() => {
+    setExportMessage(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user) {
+        setExportMessage({ type: 'error', text: 'Please sign in to export your data.' });
+        return;
+      }
+      const user = session.user;
+
+      const [profileRes, ordersRes, addressesRes] = await Promise.all([
+        supabase.from('profiles').select('*').eq('id', user.id).maybeSingle(),
+        supabase.from('orders').select('*, order_items(*)').eq('user_id', user.id).order('created_at', { ascending: false }),
+        supabase.from('addresses').select('*').eq('user_id', user.id),
+      ]);
+
+      if (profileRes.error || ordersRes.error || addressesRes.error) {
+        throw profileRes.error || ordersRes.error || addressesRes.error;
+      }
+
       const userData = {
-        personalInfo: {
-          name: 'John Doe',
-          email: 'john@example.com',
-          phone: '+1234567890',
-          createdAt: '2024-01-15'
+        exportedAt: new Date().toISOString(),
+        account: {
+          id: user.id,
+          email: user.email,
+          createdAt: user.created_at,
+          metadata: user.user_metadata || {},
         },
-        orders: [
-          { id: 'ORD-2024-001', date: '2024-03-15', total: 129.99 },
-          { id: 'ORD-2024-002', date: '2024-03-20', total: 89.99 }
-        ],
-        addresses: [
-          { type: 'Home', street: '123 Main St', city: 'New York', zip: '10001' }
-        ],
-        preferences: {
-          newsletter: true,
-          smsNotifications: false,
-          marketing: true
-        }
+        profile: profileRes.data || null,
+        orders: ordersRes.data || [],
+        addresses: addressesRes.data || [],
       };
 
       const dataStr = JSON.stringify(userData, null, 2);
@@ -39,28 +56,19 @@ export default function PrivacySettingsPage() {
       const url = URL.createObjectURL(dataBlob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `my-data-export-${Date.now()}.json`;
+      link.download = `my-data-export-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
       link.click();
-      
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+      setExportMessage({ type: 'success', text: 'Your data has been downloaded.' });
+    } catch (err) {
+      console.error('Data export failed:', err);
+      setExportMessage({ type: 'error', text: 'We could not export your data. Please try again later.' });
+    } finally {
       setExporting(false);
-      alert('Your data has been downloaded successfully!');
-    }, 2000);
-  };
-
-  const handleDeleteAccount = async () => {
-    if (deleteConfirmText !== 'DELETE') {
-      alert('Please type DELETE to confirm');
-      return;
     }
-
-    setDeleting(true);
-    
-    setTimeout(() => {
-      alert('Account deletion request submitted. You will receive a confirmation email within 24 hours.');
-      setShowDeleteConfirm(false);
-      setDeleteConfirmText('');
-      setDeleting(false);
-    }, 2000);
   };
 
   return (
@@ -86,7 +94,7 @@ export default function PrivacySettingsPage() {
             <div>
               <h3 className="font-semibold text-blue-900 mb-1">Your Privacy Matters</h3>
               <p className="text-sm text-blue-800">
-                We are committed to protecting your personal information in compliance with GDPR, CCPA, and other privacy regulations.
+                We only use your personal information to process your orders and support requests.
               </p>
             </div>
           </div>
@@ -101,7 +109,7 @@ export default function PrivacySettingsPage() {
                 Download Your Data
               </h3>
               <p className="text-sm text-gray-600 mb-4">
-                Get a complete copy of all your personal information, orders, and preferences in JSON format.
+                Get a copy of your account details, orders and saved addresses in JSON format.
               </p>
               <button
                 onClick={handleExportData}
@@ -120,6 +128,11 @@ export default function PrivacySettingsPage() {
                   </>
                 )}
               </button>
+              {exportMessage && (
+                <p className={`mt-3 text-sm ${exportMessage.type === 'success' ? 'text-gray-700' : 'text-red-600'}`}>
+                  {exportMessage.text}
+                </p>
+              )}
             </div>
 
             <div className="bg-gray-50 rounded-lg p-4">
@@ -135,15 +148,7 @@ export default function PrivacySettingsPage() {
                 </li>
                 <li className="flex items-start gap-2">
                   <i className="ri-check-line text-gray-900 mt-0.5 flex-shrink-0"></i>
-                  <span>Saved addresses and payment methods</span>
-                </li>
-                <li className="flex items-start gap-2">
-                  <i className="ri-check-line text-gray-900 mt-0.5 flex-shrink-0"></i>
-                  <span>Marketing preferences and subscriptions</span>
-                </li>
-                <li className="flex items-start gap-2">
-                  <i className="ri-check-line text-gray-900 mt-0.5 flex-shrink-0"></i>
-                  <span>Wishlist and browsing history</span>
+                  <span>Saved addresses</span>
                 </li>
               </ul>
             </div>
@@ -157,80 +162,18 @@ export default function PrivacySettingsPage() {
                 Delete Account
               </h3>
               <p className="text-sm text-red-800 mb-4">
-                Permanently delete your account and all associated data. This action cannot be undone.
+                Account deletion is handled by our team. Message us on WhatsApp from the phone number or email
+                on your account and we&apos;ll confirm your request and remove your account.
               </p>
-              
-              {!showDeleteConfirm ? (
-                <button
-                  onClick={() => setShowDeleteConfirm(true)}
-                  className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium whitespace-nowrap"
-                >
-                  Request Account Deletion
-                </button>
-              ) : (
-                <div className="space-y-4">
-                  <div className="bg-white rounded-lg p-4 border border-red-300">
-                    <h4 className="font-semibold text-red-900 mb-2">⚠️ Before You Continue:</h4>
-                    <ul className="space-y-2 text-sm text-gray-700 mb-4">
-                      <li className="flex items-start gap-2">
-                        <i className="ri-alert-line text-red-600 mt-0.5 flex-shrink-0"></i>
-                        <span>All your orders and purchase history will be deleted</span>
-                      </li>
-                      <li className="flex items-start gap-2">
-                        <i className="ri-alert-line text-red-600 mt-0.5 flex-shrink-0"></i>
-                        <span>Your loyalty points and rewards will be forfeited</span>
-                      </li>
-                      <li className="flex items-start gap-2">
-                        <i className="ri-alert-line text-red-600 mt-0.5 flex-shrink-0"></i>
-                        <span>Active subscriptions will be cancelled</span>
-                      </li>
-                      <li className="flex items-start gap-2">
-                        <i className="ri-alert-line text-red-600 mt-0.5 flex-shrink-0"></i>
-                        <span>This action cannot be reversed</span>
-                      </li>
-                    </ul>
-
-                    <div className="mb-4">
-                      <label className="block text-sm font-medium mb-2 text-gray-900">
-                        Type <span className="font-bold">DELETE</span> to confirm:
-                      </label>
-                      <input
-                        type="text"
-                        value={deleteConfirmText}
-                        onChange={(e) => setDeleteConfirmText(e.target.value)}
-                        placeholder="DELETE"
-                        className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                      />
-                    </div>
-
-                    <div className="flex gap-3">
-                      <button
-                        onClick={() => {
-                          setShowDeleteConfirm(false);
-                          setDeleteConfirmText('');
-                        }}
-                        className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors font-medium whitespace-nowrap"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={handleDeleteAccount}
-                        disabled={deleteConfirmText !== 'DELETE' || deleting}
-                        className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed font-medium whitespace-nowrap"
-                      >
-                        {deleting ? (
-                          <>
-                            <i className="ri-loader-4-line animate-spin mr-2"></i>
-                            Processing...
-                          </>
-                        ) : (
-                          'Delete My Account'
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
+              <a
+                href={whatsappHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium whitespace-nowrap"
+              >
+                <i className="ri-whatsapp-line"></i>
+                Request deletion on WhatsApp
+              </a>
             </div>
           </div>
         </div>
@@ -256,7 +199,7 @@ export default function PrivacySettingsPage() {
               <i className="ri-delete-bin-line text-lg text-gray-400 flex-shrink-0"></i>
               <div>
                 <h3 className="font-semibold mb-1">Right to Erasure</h3>
-                <p className="text-gray-600">You can request complete deletion of your account and all data.</p>
+                <p className="text-gray-600">You can ask us to delete your account by contacting us on WhatsApp.</p>
               </div>
             </div>
             <div className="flex gap-3">

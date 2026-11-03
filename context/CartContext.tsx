@@ -9,6 +9,7 @@ export type CartItem = {
     image: string;
     quantity: number;
     variant?: string;
+    variantId?: string;
     slug: string;
     maxStock: number;
     moq?: number; // Minimum Order Quantity
@@ -78,6 +79,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
     }, [cart, isInitialized]);
 
     const addToCart = (newItem: CartItem) => {
+        if (!(newItem.maxStock > 0) || !(newItem.quantity > 0)) return;
         setCart((prevCart) => {
             const existingItemIndex = prevCart.findIndex(
                 (item) => item.id === newItem.id && item.variant === newItem.variant
@@ -94,7 +96,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
                 newCart[existingItemIndex] = { ...existingItem, quantity: newQuantity };
                 return newCart;
             } else {
-                return [...prevCart, newItem];
+                return [...prevCart, { ...newItem, quantity: Math.min(newItem.quantity, newItem.maxStock) }];
             }
         });
 

@@ -155,57 +155,27 @@ export default function ModulesPage() {
 
   const categories = ['all', ...Array.from(new Set(modules.map(m => m.category)))];
 
-  /* Lock Screen Logic */
-  const [isLocked, setIsLocked] = useState(true);
-  const [pin, setPin] = useState('');
-  const [pinError, setPinError] = useState('');
+  /* Only admins manage modules. The server enforces this too (lib/db/access.ts);
+     the old PIN lived in the page's own code, so anyone could read it. */
+  const [role, setRole] = useState<string | null>(null);
+  useEffect(() => {
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return setRole('none');
+      const { data } = await supabase.from('profiles').select('role').eq('id', session.user.id).maybeSingle();
+      setRole(data?.role || 'none');
+    })();
+  }, []);
 
-  const handleUnlock = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (pin === '6526') {
-      setIsLocked(false);
-    } else {
-      setPinError('Incorrect PIN');
-      setPin('');
-    }
-  };
-
-  if (isLocked) {
+  if (role !== 'admin') {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-8 text-center border border-gray-100">
           <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-6">
-            <i className="ri-lock-2-line text-4xl text-gray-700"></i>
+            <i className={`${role === null ? 'ri-loader-4-line animate-spin' : 'ri-lock-2-line'} text-4xl text-gray-700`}></i>
           </div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">Restricted Access</h2>
-          <p className="text-gray-500 mb-8">Please enter the security PIN to access Modules.</p>
-
-          <form onSubmit={handleUnlock} className="space-y-4">
-            <div>
-              <input
-                type="password"
-                value={pin}
-                onChange={(e) => {
-                  setPin(e.target.value);
-                  setPinError('');
-                }}
-                className="w-full text-center text-3xl font-bold tracking-widest px-4 py-4 border-2 border-gray-200 rounded-xl focus:border-gray-600 focus:ring-4 focus:ring-gray-600/10 outline-none transition-all"
-                placeholder="• • • •"
-                maxLength={4}
-                autoFocus
-              />
-            </div>
-            {pinError && (
-              <p className="text-red-500 text-sm font-medium animate-pulse">{pinError}</p>
-            )}
-            <button
-              type="submit"
-              className="w-full bg-gray-900 hover:bg-gray-900 text-white font-bold py-4 rounded-xl transition-colors text-lg"
-            >
-              Unlock Dashboard
-            </button>
-          </form>
-
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">{role === null ? 'Checking access…' : 'Admins only'}</h2>
+          {role !== null && <p className="text-gray-500">Only an admin account can turn modules on or off.</p>}
         </div>
       </div>
     );

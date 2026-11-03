@@ -1,4 +1,5 @@
 import { readObject, verifyObjectToken } from "@/lib/db/storage";
+import { STORAGE_BUCKETS } from "@/lib/db/access";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -8,6 +9,12 @@ export async function GET(
   ctx: { params: Promise<{ bucket: string; path: string[] }> }
 ): Promise<Response> {
   const { bucket, path } = await ctx.params;
+  if (!STORAGE_BUCKETS.has(bucket)) {
+    return new Response(JSON.stringify({ error: "Object not found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
   const objectPath = path.map(decodeURIComponent).join("/");
   const url = new URL(req.url);
   const token = url.searchParams.get("token") || "";
@@ -32,6 +39,8 @@ export async function GET(
     status: 200,
     headers: {
       "Content-Type": obj.contentType,
+      "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": "default-src 'none'; sandbox",
       "Cache-Control": "private, max-age=300",
     },
   });
